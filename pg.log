@@ -1,0 +1,10 @@
+2026-09-14 16:59:56.769 UTC [234] LOG:  starting PostgreSQL 17.11 on aarch64-unknown-linux-gnu, compiled by gcc (Ubuntu/Linaro 7.5.0-3ubuntu1~18.04) 7.5.0, 64-bit
+2026-09-14 16:59:56.770 UTC [234] LOG:  listening on IPv6 address "::1", port 5432
+2026-09-14 16:59:56.770 UTC [234] LOG:  listening on IPv4 address "127.0.0.1", port 5432
+2026-09-14 16:59:56.771 UTC [234] LOG:  listening on Unix socket "/workspace/lawfirm/.s.PGSQL.5432"
+2026-09-14 16:59:56.775 UTC [237] LOG:  database system was shut down at 2026-09-14 16:59:56 UTC
+2026-09-14 16:59:56.777 UTC [234] LOG:  database system is ready to accept connections
+2026-09-14 17:04:56.875 UTC [235] LOG:  checkpoint starting: time
+2026-09-14 17:06:34.590 UTC [235] LOG:  checkpoint complete: wrote 961 buffers (5.9%); 0 WAL file(s) added, 0 removed, 0 recycled; write=97.648 s, sync=0.056 s, total=97.715 s; sync files=310, longest=0.008 s, average=0.001 s; distance=4492 kB, estimate=4492 kB; lsn=0/193DB60, redo lsn=0/193DAD0
+2026-09-14 17:14:56.687 UTC [235] LOG:  checkpoint starting: time
+2026-09-14 17:15:20.935 UTC [235] LOG:  checkpoint complete: wrote 237 buffers (1.4%); 0 WAL file(s) added, 0 removed, 0 recycled; write=24.232 s, sync=0.010 s, total=24.249 s; sync files=163, longest=0.001 s, average=0.001 s; distance=1087 kB, estimate=4151 kB; lsn=0/1A4D8B0, redo lsn=0/1A4D820

@@ -1,0 +1,1 @@
+/workspace/lawfirm/pgsql/bin/postgres "-D" "pgdata" "-p" "5432" "-k" "/workspace/lawfirm"
