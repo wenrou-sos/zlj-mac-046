@@ -1,12 +1,14 @@
 """内置样例案件数据：python manage.py seed"""
 from datetime import date, datetime, timedelta
 
+from django.core.files.base import ContentFile
 from django.core.management.base import BaseCommand
 from django.utils import timezone
 
 from cases.models import (Case, CaseLawyer, CaseParty, Deadline, Hearing,
-                          Lawyer, Material, Party, StageLog)
-
+                          Lawyer, Material, MaterialReview,
+                          MaterialSubmission, MaterialVersion, Party, StageLog,
+                          SubmissionItem, SubmissionReceipt)
 TODAY = date.today()
 
 
@@ -25,7 +27,9 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         # 清空旧数据（顺序：关联表 -> 主表）
-        for model in (Hearing, StageLog, Material, Deadline,
+        for model in (Hearing, StageLog, SubmissionReceipt, SubmissionItem,
+                      MaterialSubmission, MaterialReview, MaterialVersion,
+                      Material, Deadline,
                       CaseParty, CaseLawyer, Case, Party, Lawyer):
             model.objects.all().delete()
 
@@ -181,27 +185,247 @@ class Command(BaseCommand):
                 StageLog.objects.create(case=case, stage=stage,
                                         log_date=d(days), notes=notes)
 
-        # ---------- 材料提交 ----------
-        for case, name, to, days, status_, notes in [
-            (c1, '民事起诉状', '朝阳区人民法院', -90, 'accepted', ''),
-            (c1, '证据清单及证据材料(共12组)', '朝阳区人民法院', -20, 'submitted', '含送货单、对账单、催款函'),
-            (c1, '代理词', '朝阳区人民法院', None, 'pending', '开庭前提交'),
-            (c2, '民事上诉状', '上海二中院', -55, 'accepted', ''),
-            (c2, '二审新证据(货损鉴定报告)', '上海二中院', None, 'pending', '等待鉴定机构出具'),
-            (c3, '取保候审申请书', '福田区人民检察院', -40, 'accepted', '已取保'),
-            (c3, '辩护意见', '福田区人民法院', -22, 'submitted', ''),
-            (c4, '管辖权异议申请书', '杭州市中级人民法院', -28, 'accepted', '法院已裁定移送'),
-            (c4, '民事答辩状', '杭州市中级人民法院', -12, 'submitted', ''),
-            (c5, '恢复执行申请书', '成都市中级人民法院', -120, 'accepted', ''),
-            (c5, '被执行人财产线索清单', '成都市中级人民法院执行局', -30, 'submitted', '新增两处房产线索'),
-            (c6, '行政起诉状', '北京市第三中级人民法院', -25, 'accepted', ''),
-            (c6, '证据材料(处罚决定书等)', '北京市第三中级人民法院', None, 'pending', ''),
-            (c7, '仲裁申请书', '深圳国际仲裁院', -15, 'accepted', ''),
-        ]:
-            Material.objects.create(
-                case=case, name=name, submitted_to=to,
-                submit_date=d(days) if days is not None else None,
-                status=status_, notes=notes)
+        # ---------- 材料（版本 / 审阅 / 提交 / 回执） ----------
+        def fake_file(material_name, version_no, body):
+            """生成一个纯文本占位附件（真实 PDF/DOCX 由用户上传替换）"""
+            safe = material_name.replace('/', '_').replace('(', '').replace(')', '')
+            data = (f'{material_name} — 第 {version_no} 版（样例占位文件）\n\n{body}\n')
+            return ContentFile(data.encode(), name=f'{safe}_v{version_no}.txt')
+
+        def add_version(material, no, uploaded_by, note, body, *,
+                        final=False, finalized_by='', backfilled=False,
+                        reviews=None, attach=True):
+            v = MaterialVersion(
+                material=material, version_no=no,
+                change_note=note, uploaded_by=uploaded_by,
+                is_backfilled=backfilled,
+                is_final=final, finalized_by=finalized_by,
+                finalized_at=timezone.now() if final else None)
+            if attach:
+                v.file = fake_file(material.name, no, body)
+                v.file_name = v.file.name
+            v.save()
+            if attach:
+                v.file_size = v.file.size
+                v.save(update_fields=['file_size'])
+            for author, result, comment in (reviews or []):
+                MaterialReview.objects.create(version=v, author=author,
+                                              result=result, comment=comment)
+            return v
+
+        def make_submission(case, to, days, method, created_by, entries,
+                            status_='submitted', receiver='', note='',
+                            receipt=None):
+            """entries: [(material, version, copies, pages)]"""
+            sub = MaterialSubmission.objects.create(
+                case=case, submitted_to=to, receiver_name=receiver,
+                method=method, submit_date=d(days) if days is not None else TODAY,
+                status=status_, created_by=created_by, note=note)
+            material_ids = set()
+            for material, ver, copies, pages in entries:
+                SubmissionItem.objects.create(
+                    submission=sub, version=ver,
+                    material_name=material.name, version_no=ver.version_no,
+                    file_name=ver.file_name, copies=copies, pages=pages)
+                material_ids.add(material.pk)
+            Material.objects.filter(pk__in=material_ids).update(status=status_)
+            if receipt:
+                rtype, rno, rname, rnote = receipt
+                SubmissionReceipt.objects.create(
+                    submission=sub, receipt_type=rtype, receipt_no=rno,
+                    receiver_name=rname, receipt_date=d(days), note=rnote)
+            return sub
+
+        # c1 起诉状：v1 被要求修改 -> v2 定稿 -> 已签收
+        m_c1_sue = Material.objects.create(case=c1, name='民事起诉状', category='起诉状',
+                                           status='signed')
+        add_version(m_c1_sue, 1, '赵国庆', '初稿，诉讼请求待核对',
+                    '诉讼请求：判令被告支付货款128万元。',
+                    reviews=[('张伟民', 'revise', '诉讼请求第二项金额需与对账单一致，'
+                                               '并补充逾期利息计算方式')])
+        v2 = add_version(m_c1_sue, 2, '赵国庆', '按主办意见修改利息计算',
+                         '诉讼请求：1.支付货款128万元；2.按LPR支付逾期利息。',
+                         final=True, finalized_by='张伟民',
+                         reviews=[('张伟民', 'approve', '可提交立案')])
+        make_submission(c1, '朝阳区人民法院立案庭', -90, 'window', '赵国庆',
+                        [(m_c1_sue, v2, 2, 6)], status_='signed',
+                        receiver='立案窗口 刘法官',
+                        receipt=('signed', '(朝)立收字第20260566号', '刘敏',
+                                 '立案窗口签收，出具材料收据'),
+                        note='立案提交，一式两份')
+
+        # c1 证据材料：多组证据，已提交待签收
+        m_c1_evi = Material.objects.create(case=c1, name='证据清单及证据材料(共12组)',
+                                           category='证据材料', status='submitted')
+        add_version(m_c1_evi, 1, '陈晓东', '证据初编',
+                    '证据1-8：送货单、入库单',
+                    reviews=[('张伟民', 'revise', '补充对账单与催款函作为第9-12组')])
+        ve2 = add_version(m_c1_evi, 2, '陈晓东', '补充对账单、催款函共12组',
+                          '证据1-12：送货单、对账单、催款函等',
+                          final=True, finalized_by='张伟民',
+                          reviews=[('张伟民', 'approve', '证据链完整')])
+        make_submission(c1, '朝阳区人民法院民二庭', -20, 'online', '陈晓东',
+                        [(m_c1_evi, ve2, 1, 86)], status_='submitted',
+                        note='通过北京法院诉讼服务平台提交，等待签收')
+
+        # c1 代理词：未定稿（仅 v1 + 审阅意见）
+        m_c1_agent = Material.objects.create(case=c1, name='代理词', category='代理词',
+                                             status='draft', notes='开庭前提交')
+        add_version(m_c1_agent, 1, '赵国庆', '代理词初稿',
+                    '围绕买卖合同关系及欠款事实展开',
+                    reviews=[('张伟民', 'comment', '庭后根据庭审焦点补充质证意见')])
+
+        # c2 答辩状（对方上诉）—— 邮寄已签收
+        m_c2_app = Material.objects.create(case=c2, name='民事答辩状', category='答辩状',
+                                           status='signed')
+        va = add_version(m_c2_app, 1, '李静怡', '针对上诉理由逐条答辩',
+                         '一审认定事实清楚，适用法律正确，请求驳回上诉。',
+                         final=True, finalized_by='李静怡')
+        make_submission(c2, '上海市第二中级人民法院立案庭', -55, 'post', '李静怡',
+                        [(m_c2_app, va, 3, 9)], status_='signed',
+                        receiver='EMS 法院专递',
+                        receipt=('signed', 'EY023356678CN', '收发室',
+                                 'EMS 回执显示法院收发室签收'),
+                        note='EMS 法院专递邮寄')
+
+        # c2 新证据：等待鉴定，暂无附件（历史补录占位）
+        m_c2_evi = Material.objects.create(case=c2, name='二审新证据(货损鉴定报告)',
+                                           category='证据材料', status='draft',
+                                           notes='等待鉴定机构出具后补传')
+        add_version(m_c2_evi, 1, '李静怡', '鉴定报告出具后在此补传新版本',
+                    '', attach=False, backfilled=True)
+
+        # c3 取保候审申请：v1 修改后 v2 定稿，已签收
+        m_c3_bail = Material.objects.create(case=c3, name='取保候审申请书',
+                                            category='申请书', status='signed')
+        add_version(m_c3_bail, 1, '刘雅芳', '初稿', '申请对孙建国取保候审。',
+                    reviews=[('王志强', 'revise', '补充保证人信息与社会危险性论证')])
+        vb2 = add_version(m_c3_bail, 2, '刘雅芳', '补充保证人及理由',
+                          '保证人：孙某（嫌疑人之父），已退休，固定住所。',
+                          final=True, finalized_by='王志强')
+        make_submission(c3, '福田区人民检察院案件管理中心', -40, 'hand', '刘雅芳',
+                        [(m_c3_bail, vb2, 1, 5)], status_='signed',
+                        receiver='案管中心 陈检察官助理',
+                        receipt=('signed', '深福检管收〔2026〕118号', '陈助理',
+                                 '检察机关已采纳，作出取保候审决定'),
+                        note='当面递交')
+
+        # c3 辩护意见：已提交
+        m_c3_def = Material.objects.create(case=c3, name='辩护意见',
+                                           category='辩护意见', status='submitted')
+        vd = add_version(m_c3_def, 1, '王志强', '罪轻辩护意见',
+                         '主观恶性小、积极退赔，建议从轻处罚。',
+                         final=True, finalized_by='王志强')
+        make_submission(c3, '福田区人民法院刑庭', -22, 'window', '王志强',
+                        [(m_c3_def, vd, 5, 8)], status_='submitted',
+                        note='庭审时提交法庭及公诉人、被告人各一份')
+
+        # c4 管辖权异议：v1 被退回补正（缺授权委托书、所函），补正后重新提交并签收
+        m_c4_juris = Material.objects.create(case=c4, name='管辖权异议申请书',
+                                             category='申请书', status='signed')
+        vj1 = add_version(m_c4_juris, 1, '赵国庆', '初稿',
+                          '请求将本案移送被告住所地法院管辖。',
+                          final=True, finalized_by='张伟民')
+        sub_juris_1 = make_submission(
+            c4, '杭州市中级人民法院立案庭', -33, 'window', '赵国庆',
+            [(m_c4_juris, vj1, 2, 4)], status_='returned',
+            receiver='立案窗口',
+            receipt=('returned', '', '立案窗口 张法官',
+                     '材料不齐：缺少授权委托书原件及律师事务所函，'
+                     '请于收到通知之日起7日内补正后重新提交'),
+            note='首次提交，窗口形式审查')
+        vj2 = add_version(m_c4_juris, 2, '赵国庆', '补附授权委托书、所函',
+                          '在原申请基础上附授权委托书原件、律师事务所函。',
+                          reviews=[('张伟民', 'approve', '按补正通知补齐，可重新提交')],
+                          final=True, finalized_by='张伟民')
+        sub_juris_2 = make_submission(
+            c4, '杭州市中级人民法院立案庭', -28, 'window', '赵国庆',
+            [(m_c4_juris, vj2, 2, 8)], status_='signed',
+            receiver='立案窗口 张法官',
+            receipt=('signed', '(浙01)立收字第20263302号', '张法官',
+                     '补正材料齐全，予以签收，后裁定移送'),
+            note='退回补正后重新提交')
+        sub_juris_2.resubmitted_from = sub_juris_1
+        sub_juris_2.save(update_fields=['resubmitted_from'])
+
+        # c4 答辩状：已提交
+        m_c4_ans = Material.objects.create(case=c4, name='民事答辩状',
+                                           category='答辩状', status='submitted')
+        vans = add_version(m_c4_ans, 1, '张伟民', '答辩状定稿',
+                           '租金支付受疫情及房屋瑕疵影响，请求调减违约金。',
+                           final=True, finalized_by='张伟民')
+        make_submission(c4, '杭州市中级人民法院民庭', -12, 'online', '赵国庆',
+                        [(m_c4_ans, vans, 1, 12)], status_='submitted',
+                        note='浙江法院网平台提交')
+
+        # c5 恢复执行申请：已签收
+        m_c5_res = Material.objects.create(case=c5, name='恢复执行申请书',
+                                           category='申请书', status='signed')
+        vr = add_version(m_c5_res, 1, '陈晓东', '恢复执行申请',
+                         '发现被执行人新财产线索，申请恢复执行。',
+                         final=True, finalized_by='陈晓东')
+        make_submission(c5, '成都市中级人民法院执行局', -120, 'window', '陈晓东',
+                        [(m_c5_res, vr, 2, 6)], status_='signed',
+                        receiver='执行立案窗口',
+                        receipt=('signed', '成执恢收字第0089号', '窗口',
+                                 '立案恢复执行，案号(2026)川01执恢89号'))
+
+        # c5 财产线索：已提交待签收
+        m_c5_clue = Material.objects.create(case=c5, name='被执行人财产线索清单',
+                                            category='线索材料', status='submitted',
+                                            notes='新增两处房产线索')
+        vc = add_version(m_c5_clue, 1, '陈晓东', '两处房产+一个银行账户',
+                         '线索1：锦江区某商铺；线索2：高新区某住宅。',
+                         final=True, finalized_by='陈晓东')
+        make_submission(c5, '成都市中级人民法院执行局承办法官', -30, 'hand', '陈晓东',
+                        [(m_c5_clue, vc, 1, 3)], status_='submitted',
+                        receiver='执行法官 周法官',
+                        note='当面向承办法官提交，待出具回执')
+
+        # c5 限高申请：被退回补正、尚未重新提交（演示挂起状态）
+        m_c5_delay = Material.objects.create(case=c5, name='限制消费申请书',
+                                             category='申请书', status='returned',
+                                             notes='法院要求补充被执行人法定代表人身份材料')
+        vdl = add_version(m_c5_delay, 1, '陈晓东', '申请对被执行人法定代表人限高',
+                          '请求采取限制消费措施。',
+                          final=True, finalized_by='陈晓东')
+        make_submission(c5, '成都市中级人民法院执行局', -8, 'online', '陈晓东',
+                        [(m_c5_delay, vdl, 1, 2)], status_='returned',
+                        receipt=('returned', '', '执行局',
+                                 '请补充被执行人法定代表人身份证复印件后重新提交'))
+
+        # c6 行政起诉状：已签收
+        m_c6_sue = Material.objects.create(case=c6, name='行政起诉状',
+                                           category='起诉状', status='signed')
+        vs = add_version(m_c6_sue, 1, '刘雅芳', '撤销处罚之诉',
+                         '请求撤销被告作出的行政处罚决定。',
+                         final=True, finalized_by='刘雅芳')
+        make_submission(c6, '北京市第三中级人民法院立案庭', -25, 'window', '刘雅芳',
+                        [(m_c6_sue, vs, 2, 7)], status_='signed',
+                        receipt=('signed', '(京03)立收字第20260771号', '立案窗口',
+                                 '当场立案受理'))
+
+        # c6 处罚决定证据：尚未定稿（占位版本，等待补录原件扫描件）
+        m_c6_evi = Material.objects.create(case=c6, name='证据材料(处罚决定书等)',
+                                           category='证据材料', status='draft')
+        add_version(m_c6_evi, 1, '刘雅芳', '先登记，原件扫描后补传',
+                    '', attach=False, backfilled=True)
+
+        # c7 仲裁申请：v1 修改 -> v2 定稿，邮寄已签收
+        m_c7_arb = Material.objects.create(case=c7, name='仲裁申请书',
+                                           category='仲裁申请', status='signed')
+        add_version(m_c7_arb, 1, '王志强', '仲裁申请初稿',
+                    '请求支付股权转让款98万元。',
+                    reviews=[('李静怡', 'revise', '仲裁请求补充违约金条款依据')])
+        varb2 = add_version(m_c7_arb, 2, '王志强', '补充违约金依据',
+                            '依据协议第7条主张逾期付款违约金。',
+                            final=True, finalized_by='李静怡')
+        make_submission(c7, '深圳国际仲裁院立案部', -15, 'post', '王志强',
+                        [(m_c7_arb, varb2, 3, 11)], status_='signed',
+                        receiver='仲裁院立案部',
+                        receipt=('signed', '深国仲收〔2026〕078号', '立案秘书',
+                                 '仲裁申请已受理'),
+                        note='邮寄提交')
 
         # ---------- 期限提醒 ----------
         for case, title, dtype, days, done, notes in [
@@ -226,4 +450,6 @@ class Command(BaseCommand):
             f'样例数据已生成：{Lawyer.objects.count()}名律师、'
             f'{Party.objects.count()}个当事人、{Case.objects.count()}个案件、'
             f'{Hearing.objects.count()}次开庭、{Material.objects.count()}份材料、'
+            f'{MaterialVersion.objects.count()}个版本、'
+            f'{MaterialSubmission.objects.count()}个提交批次、'
             f'{Deadline.objects.count()}项期限'))

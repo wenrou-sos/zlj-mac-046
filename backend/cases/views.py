@@ -1,19 +1,27 @@
 from datetime import date, timedelta
 
+from django.db import transaction
 from django.db.models import Count, Q
 from django.shortcuts import get_object_or_404
+from django.utils import timezone
 from rest_framework import status, viewsets
 from rest_framework.decorators import action, api_view
+from rest_framework.exceptions import PermissionDenied
+from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.response import Response
 
 from .models import (Case, CaseLawyer, CaseParty, Deadline, Hearing, Lawyer,
-                     Material, Party, StageLog)
+                     Material, MaterialReview, MaterialSubmission,
+                     MaterialVersion, Party, StageLog, SubmissionItem,
+                     SubmissionReceipt)
 from .serializers import (CaseDetailSerializer, CaseLawyerSerializer,
                           CaseListSerializer, CasePartySerializer,
                           CaseWriteSerializer, DeadlineSerializer,
                           HearingSerializer, LawyerSerializer,
-                          MaterialSerializer, PartySerializer,
-                          StageLogSerializer)
+                          MaterialReviewSerializer, MaterialSerializer,
+                          MaterialSubmissionSerializer, MaterialVersionSerializer,
+                          PartySerializer, StageLogSerializer,
+                          SubmissionCreateSerializer, SubmissionReceiptSerializer)
 
 
 class LawyerViewSet(viewsets.ModelViewSet):
@@ -44,7 +52,8 @@ class PartyViewSet(viewsets.ModelViewSet):
 class CaseViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         qs = Case.objects.prefetch_related(
-            'caselawyer_set__lawyer', 'caseparty_set__party', 'deadlines')
+            'caselawyer_set__lawyer', 'caseparty_set__party', 'deadlines',
+            'material_submissions__items', 'materials__versions__reviews')
         p = self.request.query_params
         if p.get('stage'):
             qs = qs.filter(stage=p['stage'])
@@ -149,15 +158,192 @@ class StageLogViewSet(viewsets.ModelViewSet):
         return qs
 
 
+# ---------- 材料：主档 / 版本 / 审阅意见 ----------
+
 class MaterialViewSet(viewsets.ModelViewSet):
     serializer_class = MaterialSerializer
 
     def get_queryset(self):
-        qs = Material.objects.select_related('case')
+        qs = (Material.objects
+              .select_related('case')
+              .prefetch_related('versions__reviews'))
         case_id = self.request.query_params.get('case')
         if case_id:
             qs = qs.filter(case_id=case_id)
         return qs
+
+    def perform_destroy(self, instance):
+        # 已提交批次引用过的材料一律不得删除（版本同样受 PROTECT 保护）
+        if SubmissionItem.objects.filter(version__material=instance).exists():
+            raise PermissionDenied('该材料已有提交记录，历史材料不可删除，可继续查看')
+        super().perform_destroy(instance)
+
+
+class MaterialVersionViewSet(viewsets.ModelViewSet):
+    """材料版本：仅允许新增与查看；不允许修改、不允许删除"""
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
+    http_method_names = ['get', 'post', 'head', 'options']
+    serializer_class = MaterialVersionSerializer
+
+    def get_queryset(self):
+        qs = MaterialVersion.objects.select_related('material', 'material__case')
+        params = self.request.query_params
+        if params.get('material'):
+            qs = qs.filter(material_id=params['material'])
+        if params.get('case'):
+            qs = qs.filter(material__case_id=params['case'])
+        return qs
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            version = serializer.save()
+        except PermissionDenied:
+            raise
+        except Exception:
+            # 并发等任何失败都不得留下附件记录（序列化器内已清理孤儿文件）
+            return Response(
+                {'detail': '版本保存失败（可能与他人同时上传冲突），请重试'},
+                status=status.HTTP_409_CONFLICT)
+        headers = self.get_success_headers(serializer.data)
+        return Response(serializer.data, status=status.HTTP_201_CREATED,
+                        headers=headers)
+
+    @action(detail=True, methods=['post'])
+    def finalize(self, request, pk=None):
+        """定稿确认：固定版本；他人若已定稿另一版本则互斥拒绝"""
+        operator = (request.data.get('operator') or '').strip()
+        if not operator:
+            return Response({'detail': '请填写定稿确认人'},
+                            status=status.HTTP_400_BAD_REQUEST)
+
+        with transaction.atomic():
+            version = (MaterialVersion.objects
+                       .select_for_update()
+                       .select_related('material')
+                       .get(pk=pk))
+            material = (Material.objects
+                        .select_for_update()
+                        .get(pk=version.material_id))
+            if version.is_final:
+                return Response({'detail': '该版本已是定稿版本'},
+                                status=status.HTTP_400_BAD_REQUEST)
+            if not version.file:
+                return Response(
+                    {'detail': '该版本缺少附件（历史补录件），请先补传文件版本再定稿'},
+                    status=status.HTTP_400_BAD_REQUEST)
+            if version.submission_items.exists():
+                return Response(
+                    {'detail': '该版本已随批次提交，已提交版本不得再改定稿状态'},
+                    status=status.HTTP_400_BAD_REQUEST)
+            others = (MaterialVersion.objects
+                      .filter(material=material, is_final=True)
+                      .order_by('-version_no'))
+            blocking = None
+            for other in others:
+                # 已随「未退回」批次提交的定稿受保护；
+                # 仅存在于已退回批次中的定稿可被补正版取代（用于重新提交）
+                active = other.submission_items.exclude(
+                    submission__status='returned').exists()
+                if active:
+                    blocking = other
+                    break
+            if blocking is not None:
+                return Response(
+                    {'detail': f'定稿 v{blocking.version_no} 已提交，'
+                               f'已提交版本不得被替换；如需修改请先经退回补正流程'},
+                    status=status.HTTP_409_CONFLICT)
+            # 其余旧定稿（含已退回批次中的定稿）标记取消，定稿前移到本版本
+            others.update(is_final=False, finalized_by='', finalized_at=None)
+            version.is_final = True
+            version.finalized_by = operator
+            version.finalized_at = timezone.now()
+            version.save(update_fields=['is_final', 'finalized_by', 'finalized_at'])
+            if material.status in ('draft', 'finalized', 'returned'):
+                material.status = 'finalized'
+                material.save(update_fields=['status'])
+
+        return Response(MaterialVersionSerializer(version, context={'request': request}).data)
+
+
+class MaterialReviewViewSet(viewsets.ModelViewSet):
+    """审阅意见：只追加，不允许修改、不允许删除"""
+    http_method_names = ['get', 'post', 'head', 'options']
+    serializer_class = MaterialReviewSerializer
+
+    def get_queryset(self):
+        qs = MaterialReview.objects.select_related('version', 'version__material')
+        params = self.request.query_params
+        if params.get('version'):
+            qs = qs.filter(version_id=params['version'])
+        if params.get('material'):
+            qs = qs.filter(version__material_id=params['material'])
+        return qs
+
+    def perform_create(self, serializer):
+        # 已提交版本的审阅意见只可作为留痕补充，不影响其固定性
+        serializer.save()
+
+
+# ---------- 提交批次 / 回执 ----------
+
+class MaterialSubmissionViewSet(viewsets.ModelViewSet):
+    """提交批次：新建时固定清单与版本快照；批次本身不允许编辑/删除"""
+    http_method_names = ['get', 'post', 'head', 'options']
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
+
+    def get_queryset(self):
+        qs = (MaterialSubmission.objects
+              .prefetch_related('items', 'receipts'))
+        case_id = self.request.query_params.get('case')
+        if case_id:
+            qs = qs.filter(case_id=case_id)
+        return qs
+
+    def get_serializer_class(self):
+        if self.action == 'create':
+            return SubmissionCreateSerializer
+        return MaterialSubmissionSerializer
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        submission = serializer.save()
+        out = MaterialSubmissionSerializer(submission, context={'request': request})
+        return Response(out.data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=['get'])
+    def resubmissions(self, request, pk=None):
+        submission = self.get_object()
+        qs = submission.resubmissions.all()
+        data = MaterialSubmissionSerializer(qs, many=True, context={'request': request}).data
+        return Response(data)
+
+
+class SubmissionReceiptViewSet(viewsets.ModelViewSet):
+    """签收 / 退回补正回执：只追加；不允许修改/删除"""
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
+    http_method_names = ['get', 'post', 'head', 'options']
+    serializer_class = SubmissionReceiptSerializer
+
+    def get_queryset(self):
+        qs = SubmissionReceipt.objects.select_related('submission')
+        params = self.request.query_params
+        if params.get('submission'):
+            qs = qs.filter(submission_id=params['submission'])
+        if params.get('case'):
+            qs = qs.filter(submission__case_id=params['case'])
+        return qs
+
+    def create(self, request, *args, **kwargs):
+        try:
+            return super().create(request, *args, **kwargs)
+        except Exception as exc:
+            if getattr(exc, 'status_code', None):
+                raise
+            return Response({'detail': '回执保存失败，请重试'},
+                            status=status.HTTP_409_CONFLICT)
 
 
 class DeadlineViewSet(viewsets.ModelViewSet):

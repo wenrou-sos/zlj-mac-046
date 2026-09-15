@@ -12,6 +12,14 @@ router.register('case-lawyers', views.CaseLawyerViewSet, basename='case-lawyer')
 router.register('hearings', views.HearingViewSet, basename='hearing')
 router.register('stage-logs', views.StageLogViewSet, basename='stage-log')
 router.register('materials', views.MaterialViewSet, basename='material')
+router.register('material-versions', views.MaterialVersionViewSet,
+                basename='material-version')
+router.register('material-reviews', views.MaterialReviewViewSet,
+                basename='material-review')
+router.register('submissions', views.MaterialSubmissionViewSet,
+                basename='submission')
+router.register('submission-receipts', views.SubmissionReceiptViewSet,
+                basename='submission-receipt')
 router.register('deadlines', views.DeadlineViewSet, basename='deadline')
 
 urlpatterns = [

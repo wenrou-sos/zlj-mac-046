@@ -136,39 +136,12 @@
 
           <!-- 材料 -->
           <el-tab-pane :label="`案件材料 (${caseData.materials.length})`" name="materials">
-            <div class="tab-bar">
-              <el-button type="primary" size="small" @click="materialDialog = true">登记材料</el-button>
-            </div>
-            <el-table :data="caseData.materials" size="small">
-              <el-table-column prop="name" label="材料名称" min-width="200" />
-              <el-table-column prop="submitted_to" label="提交对象" min-width="150" />
-              <el-table-column prop="submit_date" label="提交日期" width="110">
-                <template #default="{ row }">{{ row.submit_date || '-' }}</template>
-              </el-table-column>
-              <el-table-column label="状态" width="130">
-                <template #default="{ row }">
-                  <el-select
-                    :model-value="row.status"
-                    size="small"
-                    @change="(v) => updateMaterialStatus(row, v)"
-                  >
-                    <el-option label="待提交" value="pending" />
-                    <el-option label="已提交" value="submitted" />
-                    <el-option label="已签收" value="accepted" />
-                  </el-select>
-                </template>
-              </el-table-column>
-              <el-table-column prop="notes" label="备注" min-width="140" />
-              <el-table-column label="操作" width="80">
-                <template #default="{ row }">
-                  <el-popconfirm title="确定删除该材料记录？" @confirm="del('/materials/', row.id)">
-                    <template #reference>
-                      <el-button link type="danger" size="small">删除</el-button>
-                    </template>
-                  </el-popconfirm>
-                </template>
-              </el-table-column>
-            </el-table>
+            <MaterialsPanel
+              :case-id="caseId"
+              :materials="caseData.materials"
+              :submissions="caseData.material_submissions || []"
+              @reload="load"
+            />
           </el-tab-pane>
 
           <!-- 期限 -->
@@ -352,35 +325,6 @@
       </template>
     </el-dialog>
 
-    <!-- 材料对话框 -->
-    <el-dialog v-model="materialDialog" title="登记案件材料" width="440px">
-      <el-form label-width="90px">
-        <el-form-item label="材料名称" required>
-          <el-input v-model="materialForm.name" />
-        </el-form-item>
-        <el-form-item label="提交对象">
-          <el-input v-model="materialForm.submitted_to" placeholder="如 朝阳区人民法院" />
-        </el-form-item>
-        <el-form-item label="提交日期">
-          <el-date-picker v-model="materialForm.submit_date" type="date" value-format="YYYY-MM-DD" style="width: 100%" />
-        </el-form-item>
-        <el-form-item label="状态">
-          <el-select v-model="materialForm.status" style="width: 100%">
-            <el-option label="待提交" value="pending" />
-            <el-option label="已提交" value="submitted" />
-            <el-option label="已签收" value="accepted" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="备注">
-          <el-input v-model="materialForm.notes" type="textarea" :rows="2" />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="materialDialog = false">取消</el-button>
-        <el-button type="primary" @click="addMaterial">保存</el-button>
-      </template>
-    </el-dialog>
-
     <!-- 期限对话框 -->
     <el-dialog v-model="deadlineDialog" title="添加期限提醒" width="440px">
       <el-form label-width="90px">
@@ -416,6 +360,7 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import api from '../api'
+import MaterialsPanel from './MaterialsPanel.vue'
 
 const route = useRoute()
 const caseId = route.params.id
@@ -432,7 +377,7 @@ const deadlineTypeMap = {
 }
 
 const loading = ref(false)
-const caseData = ref({ case_parties: [], case_lawyers: [], stage_logs: [], hearings: [], materials: [], deadlines: [] })
+const caseData = ref({ case_parties: [], case_lawyers: [], stage_logs: [], hearings: [], materials: [], material_submissions: [], deadlines: [] })
 const tab = ref('parties')
 
 const partyDialog = ref(false)
@@ -440,7 +385,6 @@ const newPartyDialog = ref(false)
 const lawyerDialog = ref(false)
 const stageDialog = ref(false)
 const hearingDialog = ref(false)
-const materialDialog = ref(false)
 const deadlineDialog = ref(false)
 
 const partyOptions = ref([])
@@ -453,7 +397,6 @@ const newParty = reactive({ name: '', party_type: 'person', id_number: '', phone
 const lawyerForm = reactive({ lawyer_id: null, role: 'lead' })
 const stageForm = reactive({ stage: '', log_date: '', notes: '' })
 const hearingForm = reactive({ hearing_time: '', location: '', judge: '', notes: '' })
-const materialForm = reactive({ name: '', submitted_to: '', submit_date: null, status: 'pending', notes: '' })
 const deadlineForm = reactive({ title: '', deadline_type: 'other', due_date: '', remind_days: 7, notes: '' })
 
 const pendingDeadlines = computed(() => caseData.value.deadlines.filter((d) => !d.is_done))
@@ -595,29 +538,6 @@ async function addHearing() {
   ElMessage.success('开庭安排已添加')
   hearingDialog.value = false
   Object.assign(hearingForm, { hearing_time: '', location: '', judge: '', notes: '' })
-  load()
-}
-
-/* ---------- 材料 ---------- */
-async function addMaterial() {
-  if (!materialForm.name) {
-    ElMessage.warning('材料名称必填')
-    return
-  }
-  await api.post('/materials/', { case: Number(caseId), ...materialForm })
-  ElMessage.success('材料已登记')
-  materialDialog.value = false
-  Object.assign(materialForm, { name: '', submitted_to: '', submit_date: null, status: 'pending', notes: '' })
-  load()
-}
-
-async function updateMaterialStatus(row, status) {
-  const payload = { status }
-  if (status !== 'pending' && !row.submit_date) {
-    payload.submit_date = new Date().toISOString().slice(0, 10)
-  }
-  await api.patch(`/materials/${row.id}/`, payload)
-  ElMessage.success('状态已更新')
   load()
 }
 
