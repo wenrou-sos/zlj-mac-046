@@ -2,7 +2,8 @@ from datetime import date
 
 from rest_framework import serializers
 
-from .models import (Case, CaseLawyer, CaseParty, Deadline, Hearing, Lawyer,
+from .models import (Case, CaseLawyer, CaseParty, Deadline, Hearing,
+                     HearingChangeLog, HearingLawyer, Lawyer, LawyerAbsence,
                      Material, Party, StageLog)
 
 
@@ -74,13 +75,65 @@ class CaseLawyerSerializer(serializers.ModelSerializer):
         return attrs
 
 
+class HearingLawyerSerializer(serializers.ModelSerializer):
+    lawyer = LawyerSerializer(read_only=True)
+    lawyer_id = serializers.PrimaryKeyRelatedField(
+        queryset=Lawyer.objects.all(), source='lawyer', write_only=True)
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+    confirm_status_display = serializers.CharField(
+        source='get_confirm_status_display', read_only=True)
+
+    class Meta:
+        model = HearingLawyer
+        fields = ['id', 'hearing', 'lawyer', 'lawyer_id', 'status', 'status_display',
+                  'confirm_status', 'confirm_status_display', 'attended', 'created_at']
+
+
+class HearingChangeLogSerializer(serializers.ModelSerializer):
+    change_type_display = serializers.CharField(source='get_change_type_display', read_only=True)
+
+    class Meta:
+        model = HearingChangeLog
+        fields = ['id', 'hearing', 'change_type', 'change_type_display',
+                  'reason', 'snapshot', 'created_at']
+
+
 class HearingSerializer(serializers.ModelSerializer):
     case_title = serializers.CharField(source='case.title', read_only=True)
     case_number = serializers.CharField(source='case.case_number', read_only=True)
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+    assignments = HearingLawyerSerializer(many=True, read_only=True)
+    change_logs = HearingChangeLogSerializer(many=True, read_only=True)
+    lawyer_ids = serializers.ListField(
+        child=serializers.IntegerField(), write_only=True, required=False,
+        help_text='出庭律师ID列表')
 
     class Meta:
         model = Hearing
         fields = '__all__'
+
+    def validate(self, attrs):
+        start = attrs.get('hearing_time', getattr(self.instance, 'hearing_time', None))
+        end = attrs.get('end_time', getattr(self.instance, 'end_time', None))
+        if start and end and end <= start:
+            raise serializers.ValidationError({'end_time': '预计结束时间必须晚于开庭开始时间'})
+        return attrs
+
+
+class LawyerAbsenceSerializer(serializers.ModelSerializer):
+    lawyer_name = serializers.CharField(source='lawyer.name', read_only=True)
+    category_display = serializers.CharField(source='get_category_display', read_only=True)
+
+    class Meta:
+        model = LawyerAbsence
+        fields = '__all__'
+
+    def validate(self, attrs):
+        start = attrs.get('start_time', getattr(self.instance, 'start_time', None))
+        end = attrs.get('end_time', getattr(self.instance, 'end_time', None))
+        if start and end and end <= start:
+            raise serializers.ValidationError({'end_time': '结束时间必须晚于开始时间'})
+        return attrs
 
 
 class StageLogSerializer(serializers.ModelSerializer):

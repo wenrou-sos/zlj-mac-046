@@ -125,11 +125,21 @@ class CaseLawyer(models.Model):
 
 class Hearing(models.Model):
     """开庭安排"""
+    STATUS_CHOICES = [
+        ('scheduled', '已排定'),
+        ('completed', '已完成'),
+        ('cancelled', '已取消'),
+    ]
     case = models.ForeignKey(Case, on_delete=models.CASCADE, related_name='hearings')
-    hearing_time = models.DateTimeField('开庭时间')
+    hearing_time = models.DateTimeField('开庭开始时间')
+    end_time = models.DateTimeField('预计结束时间')
     location = models.CharField('开庭地点', max_length=100)
+    buffer_minutes = models.PositiveIntegerField(
+        '跨地点往返缓冲(分钟)', default=60,
+        help_text='与其他地点的庭期/行程之间预留的往返时间')
     judge = models.CharField('承办法官/仲裁员', max_length=50, blank=True)
     notes = models.TextField('备注', blank=True)
+    status = models.CharField('状态', max_length=20, choices=STATUS_CHOICES, default='scheduled')
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -137,6 +147,71 @@ class Hearing(models.Model):
 
     def __str__(self):
         return f'{self.case.title} {self.hearing_time}'
+
+
+class HearingLawyer(models.Model):
+    """开庭-出庭律师安排（含确认与实际出庭记录）"""
+    STATUS_CHOICES = [
+        ('active', '当前安排'),
+        ('replaced', '已被替换'),
+    ]
+    CONFIRM_CHOICES = [
+        ('pending', '待确认'),
+        ('confirmed', '已确认'),
+    ]
+    hearing = models.ForeignKey(Hearing, on_delete=models.CASCADE, related_name='assignments')
+    lawyer = models.ForeignKey(Lawyer, on_delete=models.CASCADE, related_name='hearing_assignments')
+    status = models.CharField('安排状态', max_length=10, choices=STATUS_CHOICES, default='active')
+    confirm_status = models.CharField('确认状态', max_length=10, choices=CONFIRM_CHOICES, default='pending')
+    attended = models.BooleanField('实际出庭', null=True, blank=True,
+                                   help_text='开庭结束后登记的实际出庭情况')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['id']
+
+    def __str__(self):
+        return f'{self.lawyer.name} @ {self.hearing_id}'
+
+
+class HearingChangeLog(models.Model):
+    """开庭变更记录（改期/取消/换人，保留原安排及原因）"""
+    TYPE_CHOICES = [
+        ('reschedule', '改期'),
+        ('cancel', '取消'),
+        ('substitute', '临时换人'),
+    ]
+    hearing = models.ForeignKey(Hearing, on_delete=models.CASCADE, related_name='change_logs')
+    change_type = models.CharField('变更类型', max_length=20, choices=TYPE_CHOICES)
+    reason = models.TextField('变更原因')
+    snapshot = models.JSONField('变更前安排', default=dict)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at', '-id']
+
+    def __str__(self):
+        return f'{self.get_change_type_display()} @ {self.hearing_id}'
+
+
+class LawyerAbsence(models.Model):
+    """律师请假/不可用时段"""
+    CATEGORY_CHOICES = [
+        ('leave', '请假'),
+        ('unavailable', '不可用时段'),
+    ]
+    lawyer = models.ForeignKey(Lawyer, on_delete=models.CASCADE, related_name='absences')
+    category = models.CharField('类型', max_length=20, choices=CATEGORY_CHOICES, default='unavailable')
+    start_time = models.DateTimeField('开始时间')
+    end_time = models.DateTimeField('结束时间')
+    reason = models.CharField('事由', max_length=200, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['start_time']
+
+    def __str__(self):
+        return f'{self.lawyer.name} {self.get_category_display()} {self.start_time:%Y-%m-%d}'
 
 
 class StageLog(models.Model):

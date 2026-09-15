@@ -1,17 +1,21 @@
 from datetime import date, timedelta
 
+from django.db import transaction
 from django.db.models import Count, Q
 from django.shortcuts import get_object_or_404
-from rest_framework import status, viewsets
+from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action, api_view
 from rest_framework.response import Response
 
-from .models import (Case, CaseLawyer, CaseParty, Deadline, Hearing, Lawyer,
+from . import scheduling
+from .models import (Case, CaseLawyer, CaseParty, Deadline, Hearing,
+                     HearingChangeLog, HearingLawyer, Lawyer, LawyerAbsence,
                      Material, Party, StageLog)
 from .serializers import (CaseDetailSerializer, CaseLawyerSerializer,
                           CaseListSerializer, CasePartySerializer,
                           CaseWriteSerializer, DeadlineSerializer,
-                          HearingSerializer, LawyerSerializer,
+                          HearingLawyerSerializer, HearingSerializer,
+                          LawyerAbsenceSerializer, LawyerSerializer,
                           MaterialSerializer, PartySerializer,
                           StageLogSerializer)
 
