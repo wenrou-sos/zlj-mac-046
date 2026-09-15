@@ -2,8 +2,9 @@ from datetime import date
 
 from rest_framework import serializers
 
-from .models import (Case, CaseLawyer, CaseParty, Deadline, Hearing, Lawyer,
-                     Material, Party, StageLog)
+from .models import (ArchiveVersion, Case, CaseLawyer, CaseParty, Deadline,
+                     Hearing, Lawyer, Material, Party, PendingItem,
+                     ReopenRequest, StageLog)
 
 
 class LawyerSerializer(serializers.ModelSerializer):
@@ -119,16 +120,20 @@ class CaseListSerializer(serializers.ModelSerializer):
     case_lawyers = CaseLawyerSerializer(source='caselawyer_set', many=True, read_only=True)
     case_parties = CasePartySerializer(source='caseparty_set', many=True, read_only=True)
     pending_deadline_count = serializers.SerializerMethodField()
+    archive = serializers.SerializerMethodField()
 
     class Meta:
         model = Case
         fields = ['id', 'case_number', 'title', 'case_type', 'case_type_display',
                   'stage', 'stage_display', 'cause', 'court', 'filed_date',
                   'amount', 'case_lawyers', 'case_parties',
-                  'pending_deadline_count', 'created_at']
+                  'pending_deadline_count', 'archive', 'created_at']
 
     def get_pending_deadline_count(self, obj):
         return obj.deadlines.filter(is_done=False).count()
+
+    def get_archive(self, obj):
+        return obj.archive_info()
 
 
 class CaseDetailSerializer(CaseListSerializer):
@@ -136,10 +141,20 @@ class CaseDetailSerializer(CaseListSerializer):
     stage_logs = StageLogSerializer(many=True, read_only=True)
     materials = MaterialSerializer(many=True, read_only=True)
     deadlines = DeadlineSerializer(many=True, read_only=True)
+    archive_versions = serializers.SerializerMethodField()
+    reopen_requests = serializers.SerializerMethodField()
 
     class Meta(CaseListSerializer.Meta):
         fields = CaseListSerializer.Meta.fields + [
-            'description', 'hearings', 'stage_logs', 'materials', 'deadlines']
+            'description', 'hearings', 'stage_logs', 'materials', 'deadlines',
+            'archive_versions', 'reopen_requests']
+
+    def get_archive_versions(self, obj):
+        return ArchiveVersionListSerializer(obj.get_archive_versions(), many=True).data
+
+    def get_reopen_requests(self, obj):
+        return ReopenRequestSerializer(
+            obj.reopen_requests.order_by('-id'), many=True).data
 
 
 class CaseWriteSerializer(serializers.ModelSerializer):
@@ -147,3 +162,64 @@ class CaseWriteSerializer(serializers.ModelSerializer):
         model = Case
         fields = ['id', 'case_number', 'title', 'case_type', 'stage', 'cause',
                   'court', 'filed_date', 'amount', 'description']
+
+    def validate_stage(self, value):
+        # 结案必须走「结案归档-复核封存」流程，不能直接把阶段改成结案；
+        # 已经是结案的案件允许保持结案状态（仅改其他字段）
+        if value == 'closed' and not (self.instance and self.instance.stage == 'closed'):
+            raise serializers.ValidationError(
+                '结案请使用案件详情中的「结案归档」流程，经复核封存后自动进入结案')
+        return value
+
+
+class PendingItemSerializer(serializers.ModelSerializer):
+    kind_display = serializers.CharField(source='get_kind_display', read_only=True)
+    disposition_display = serializers.CharField(source='get_disposition_display', read_only=True)
+
+    class Meta:
+        model = PendingItem
+        fields = ['id', 'kind', 'kind_display', 'ref_id', 'item_key', 'title',
+                  'detail', 'disposition', 'disposition_display',
+                  'disposition_note']
+
+
+class ArchiveVersionListSerializer(serializers.ModelSerializer):
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+    pending_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ArchiveVersion
+        fields = ['id', 'version_no', 'status', 'status_display', 'closed_date',
+                  'summary', 'prepared_by', 'submitted_by', 'submitted_at',
+                  'reviewer', 'review_comment', 'sealed_at', 'reject_reason',
+                  'pending_count', 'created_at']
+
+    def get_pending_count(self, obj):
+        return obj.pending_items.count()
+
+
+class ArchiveVersionSerializer(ArchiveVersionListSerializer):
+    pending_items = PendingItemSerializer(many=True, read_only=True)
+    snapshot = serializers.JSONField(read_only=True)
+
+    class Meta(ArchiveVersionListSerializer.Meta):
+        fields = ArchiveVersionListSerializer.Meta.fields + [
+            'pending_items', 'snapshot', 'fingerprint']
+
+
+class ReopenRequestSerializer(serializers.ModelSerializer):
+    reason_type_display = serializers.CharField(source='get_reason_type_display', read_only=True)
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+    next_stage_display = serializers.CharField(source='get_next_stage_display', read_only=True)
+    archive_version_no = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ReopenRequest
+        fields = ['id', 'case', 'archive_version', 'archive_version_no',
+                  'reason_type', 'reason_type_display', 'reason',
+                  'applicant', 'status', 'status_display', 'approver',
+                  'approval_comment', 'next_stage', 'next_stage_display',
+                  'decided_at', 'created_at']
+
+    def get_archive_version_no(self, obj):
+        return obj.archive_version.version_no if obj.archive_version_id else None

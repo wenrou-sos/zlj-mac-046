@@ -38,9 +38,11 @@
           </template>
         </el-table-column>
         <el-table-column prop="case_type_display" label="类型" width="80" />
-        <el-table-column label="阶段" width="90">
+        <el-table-column label="阶段" width="110">
           <template #default="{ row }">
             <el-tag :type="stageTagType(row.stage)" size="small">{{ row.stage_display }}</el-tag>
+            <el-tag v-if="row.archive?.is_sealed" size="small" type="success" effect="dark" style="margin-left: 2px">封存</el-tag>
+            <el-tag v-else-if="row.archive?.current_status === 'submitted'" size="small" type="warning" effect="dark" style="margin-left: 2px">待复核</el-tag>
           </template>
         </el-table-column>
         <el-table-column label="承办律师" min-width="140">
@@ -57,15 +59,20 @@
           </template>
         </el-table-column>
         <el-table-column prop="filed_date" label="立案日期" width="110" />
-        <el-table-column label="操作" width="150" fixed="right">
+        <el-table-column label="操作" width="210" fixed="right">
           <template #default="{ row }">
             <el-button link type="primary" @click="$router.push(`/cases/${row.id}`)">详情</el-button>
-            <el-button link type="primary" @click="openDialog(row)">编辑</el-button>
-            <el-popconfirm title="确定删除该案件及其全部关联记录？" @confirm="remove(row)">
+            <el-button v-if="!row.archive?.is_sealed" link type="primary" @click="openDialog(row)">编辑</el-button>
+            <el-button v-else link type="primary"
+              @click="$router.push({ path: `/cases/${row.id}`, query: { tab: 'archive' } })">卷宗</el-button>
+            <el-popconfirm v-if="!row.archive?.is_sealed" title="确定删除该案件及其全部关联记录？" @confirm="remove(row)">
               <template #reference>
                 <el-button link type="danger">删除</el-button>
               </template>
             </el-popconfirm>
+            <el-tooltip v-else content="卷宗已封存，不能删除" placement="top">
+              <el-button link type="info" disabled>删除</el-button>
+            </el-tooltip>
           </template>
         </el-table-column>
         <template #empty>暂无案件，点击右上角"新建案件"登记</template>
@@ -91,9 +98,13 @@
           </el-col>
           <el-col :span="12">
             <el-form-item label="诉讼阶段">
-              <el-select v-model="form.stage" style="width: 100%">
-                <el-option v-for="(label, key) in stageMap" :key="key" :label="label" :value="key" />
+              <el-select v-model="form.stage" style="width: 100%"
+                :disabled="form.stage === 'closed'">
+                <el-option v-for="(label, key) in stageOptions" :key="key" :label="label" :value="key" />
               </el-select>
+              <div v-if="form.stage === 'closed'" class="form-hint">
+                案件已结案；如需归档封存或重开，请到案件详情「结案归档」操作
+              </div>
             </el-form-item>
           </el-col>
         </el-row>
@@ -134,11 +145,16 @@
 </template>
 
 <script setup>
-import { onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import api from '../api'
 
 const stageMap = { filing: '立案', first: '一审', second: '二审', retrial: '再审', enforcement: '执行', closed: '结案' }
+// 普通编辑不能直接选“结案”，结案走归档封存流程
+const editableStageMap = { filing: '立案', first: '一审', second: '二审', retrial: '再审', enforcement: '执行' }
+// 普通编辑不能直接选“结案”，结案走归档封存流程；已结案案件展示只读“结案”
+const stageOptions = computed(() =>
+  form.stage === 'closed' ? { closed: '结案' } : editableStageMap)
 const typeMap = { civil: '民事', criminal: '刑事', administrative: '行政', arbitration: '仲裁', nonlit: '非诉讼' }
 
 const cases = ref([])
@@ -202,4 +218,5 @@ onMounted(load)
 .link { color: #409eff; text-decoration: none; }
 .lawyer-tag { margin-right: 8px; font-size: 13px; }
 .role { color: #999; font-size: 12px; }
+.form-hint { color: #e6a23c; font-size: 12px; line-height: 1.4; }
 </style>

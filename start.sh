@@ -8,6 +8,16 @@ ROOT=$(pwd)
 # 1. 启动 PostgreSQL(用户态,端口 5432)
 if ! ./pgsql/bin/pg_ctl -D pgdata status > /dev/null 2>&1; then
   echo ">> 启动 PostgreSQL..."
+  chmod 700 pgdata
+  # 兜底补齐运行时目录（数据目录经打包/拷贝后可能丢失空目录）
+  mkdir -p pgdata/pg_notify pgdata/pg_serial pgdata/pg_snapshots pgdata/pg_tblspc \
+    pgdata/pg_replslot pgdata/pg_stat pgdata/pg_stat_tmp pgdata/pg_commit_ts \
+    pgdata/pg_dynshmem pgdata/pg_twophase pgdata/pg_logical/snapshots \
+    pgdata/pg_logical/mappings
+  chmod 700 pgdata/pg_notify pgdata/pg_serial pgdata/pg_snapshots pgdata/pg_tblspc \
+    pgdata/pg_replslot pgdata/pg_stat pgdata/pg_stat_tmp pgdata/pg_commit_ts \
+    pgdata/pg_dynshmem pgdata/pg_twophase pgdata/pg_logical/snapshots \
+    pgdata/pg_logical/mappings
   ./pgsql/bin/pg_ctl -D pgdata -l pg.log -o "-p 5432 -k $ROOT" start
   sleep 2
 else

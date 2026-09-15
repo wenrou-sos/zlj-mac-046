@@ -9,6 +9,12 @@
               <span class="title">{{ caseData.title }}</span>
               <el-tag size="small" effect="dark">{{ caseData.stage_display }}</el-tag>
               <el-tag size="small" type="info">{{ caseData.case_type_display }}</el-tag>
+              <el-tag v-if="caseData.archive?.is_sealed" size="small" type="success" effect="dark">
+                已封存 v{{ caseData.archive.sealed_version }}
+              </el-tag>
+              <el-tag v-else-if="caseData.archive?.current_status === 'submitted'" size="small" type="warning" effect="dark">
+                待复核 v{{ caseData.archive.current_version }}
+              </el-tag>
             </div>
             <div class="sub">{{ caseData.case_number }}</div>
           </div>
@@ -27,12 +33,30 @@
         </el-descriptions>
       </el-card>
 
+      <el-alert
+        v-if="locked"
+        type="success" :closable="false" show-icon
+        title="本案卷宗已封存，日常编辑与删除已锁定；再审或补充材料请在「结案归档」页签申请重开。"
+        style="margin-bottom: 16px"
+      />
+
       <el-card shadow="never">
         <el-tabs v-model="tab">
+          <!-- 结案归档 -->
+          <el-tab-pane name="archive">
+            <template #label>
+              <span>结案归档
+                <el-badge v-if="caseData.archive?.current_status === 'submitted'"
+                  is-dot type="warning" />
+              </span>
+            </template>
+            <ArchivePanel :case-data="caseData" @refresh="load" />
+          </el-tab-pane>
+
           <!-- 当事人 -->
           <el-tab-pane :label="`当事人 (${caseData.case_parties.length})`" name="parties">
             <div class="tab-bar">
-              <el-button type="primary" size="small" @click="openPartyDialog">添加当事人</el-button>
+              <el-button type="primary" size="small" :disabled="locked" @click="openPartyDialog">添加当事人</el-button>
             </div>
             <el-table :data="caseData.case_parties" size="small">
               <el-table-column label="姓名/名称" min-width="180">
@@ -53,11 +77,12 @@
               </el-table-column>
               <el-table-column label="操作" width="80">
                 <template #default="{ row }">
-                  <el-popconfirm title="确定从本案移除该当事人？" @confirm="removeParty(row)">
+                  <el-popconfirm v-if="!locked" title="确定从本案移除该当事人？" @confirm="removeParty(row)">
                     <template #reference>
                       <el-button link type="danger" size="small">移除</el-button>
                     </template>
                   </el-popconfirm>
+                  <span v-else class="readonly-tip">已封存</span>
                 </template>
               </el-table-column>
             </el-table>
@@ -66,7 +91,7 @@
           <!-- 承办律师 -->
           <el-tab-pane :label="`承办律师 (${caseData.case_lawyers.length})`" name="lawyers">
             <div class="tab-bar">
-              <el-button type="primary" size="small" @click="lawyerDialog = true">添加承办律师</el-button>
+              <el-button type="primary" size="small" :disabled="locked" @click="lawyerDialog = true">添加承办律师</el-button>
             </div>
             <el-table :data="caseData.case_lawyers" size="small">
               <el-table-column label="姓名" min-width="120">
@@ -81,11 +106,12 @@
               </el-table-column>
               <el-table-column label="操作" width="80">
                 <template #default="{ row }">
-                  <el-popconfirm title="确定移除该承办律师？" @confirm="removeLawyer(row)">
+                  <el-popconfirm v-if="!locked" title="确定移除该承办律师？" @confirm="removeLawyer(row)">
                     <template #reference>
                       <el-button link type="danger" size="small">移除</el-button>
                     </template>
                   </el-popconfirm>
+                  <span v-else class="readonly-tip">已封存</span>
                 </template>
               </el-table-column>
             </el-table>
@@ -94,7 +120,7 @@
           <!-- 诉讼阶段 -->
           <el-tab-pane label="诉讼阶段" name="stages">
             <div class="tab-bar">
-              <el-button type="primary" size="small" @click="stageDialog = true">记录阶段流转</el-button>
+              <el-button type="primary" size="small" :disabled="locked" @click="stageDialog = true">记录阶段流转</el-button>
             </div>
             <el-timeline style="padding-left: 4px; margin-top: 8px">
               <el-timeline-item
@@ -115,7 +141,7 @@
           <!-- 开庭安排 -->
           <el-tab-pane :label="`开庭安排 (${caseData.hearings.length})`" name="hearings">
             <div class="tab-bar">
-              <el-button type="primary" size="small" @click="hearingDialog = true">添加开庭</el-button>
+              <el-button type="primary" size="small" :disabled="locked" @click="hearingDialog = true">添加开庭</el-button>
             </div>
             <el-table :data="caseData.hearings" size="small">
               <el-table-column prop="hearing_time" label="开庭时间" width="160" />
@@ -124,11 +150,12 @@
               <el-table-column prop="notes" label="备注" min-width="160" />
               <el-table-column label="操作" width="80">
                 <template #default="{ row }">
-                  <el-popconfirm title="确定删除该开庭安排？" @confirm="del('/hearings/', row.id)">
+                  <el-popconfirm v-if="!locked" title="确定删除该开庭安排？" @confirm="del('/hearings/', row.id)">
                     <template #reference>
                       <el-button link type="danger" size="small">删除</el-button>
                     </template>
                   </el-popconfirm>
+                  <span v-else class="readonly-tip">已封存</span>
                 </template>
               </el-table-column>
             </el-table>
@@ -137,7 +164,7 @@
           <!-- 材料 -->
           <el-tab-pane :label="`案件材料 (${caseData.materials.length})`" name="materials">
             <div class="tab-bar">
-              <el-button type="primary" size="small" @click="materialDialog = true">登记材料</el-button>
+              <el-button type="primary" size="small" :disabled="locked" @click="materialDialog = true">登记材料</el-button>
             </div>
             <el-table :data="caseData.materials" size="small">
               <el-table-column prop="name" label="材料名称" min-width="200" />
@@ -150,6 +177,7 @@
                   <el-select
                     :model-value="row.status"
                     size="small"
+                    :disabled="locked"
                     @change="(v) => updateMaterialStatus(row, v)"
                   >
                     <el-option label="待提交" value="pending" />
@@ -161,11 +189,12 @@
               <el-table-column prop="notes" label="备注" min-width="140" />
               <el-table-column label="操作" width="80">
                 <template #default="{ row }">
-                  <el-popconfirm title="确定删除该材料记录？" @confirm="del('/materials/', row.id)">
+                  <el-popconfirm v-if="!locked" title="确定删除该材料记录？" @confirm="del('/materials/', row.id)">
                     <template #reference>
                       <el-button link type="danger" size="small">删除</el-button>
                     </template>
                   </el-popconfirm>
+                  <span v-else class="readonly-tip">已封存</span>
                 </template>
               </el-table-column>
             </el-table>
@@ -174,7 +203,7 @@
           <!-- 期限 -->
           <el-tab-pane :label="`期限管理 (${pendingDeadlines.length})`" name="deadlines">
             <div class="tab-bar">
-              <el-button type="primary" size="small" @click="deadlineDialog = true">添加期限</el-button>
+              <el-button type="primary" size="small" :disabled="locked" @click="deadlineDialog = true">添加期限</el-button>
             </div>
             <el-table :data="caseData.deadlines" size="small">
               <el-table-column prop="title" label="事项" min-width="180" />
@@ -191,18 +220,21 @@
               <el-table-column prop="notes" label="备注" min-width="160" />
               <el-table-column label="操作" width="130">
                 <template #default="{ row }">
-                  <el-button
-                    v-if="!row.is_done"
-                    link
-                    type="success"
-                    size="small"
-                    @click="markDone(row)"
-                  >办结</el-button>
-                  <el-popconfirm title="确定删除该期限？" @confirm="del('/deadlines/', row.id)">
-                    <template #reference>
-                      <el-button link type="danger" size="small">删除</el-button>
-                    </template>
-                  </el-popconfirm>
+                  <template v-if="!locked">
+                    <el-button
+                      v-if="!row.is_done"
+                      link
+                      type="success"
+                      size="small"
+                      @click="markDone(row)"
+                    >办结</el-button>
+                    <el-popconfirm title="确定删除该期限？" @confirm="del('/deadlines/', row.id)">
+                      <template #reference>
+                        <el-button link type="danger" size="small">删除</el-button>
+                      </template>
+                    </el-popconfirm>
+                  </template>
+                  <span v-else class="readonly-tip">已封存</span>
                 </template>
               </el-table-column>
             </el-table>
@@ -416,6 +448,7 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import api from '../api'
+import ArchivePanel from '../components/ArchivePanel.vue'
 
 const route = useRoute()
 const caseId = route.params.id
@@ -432,8 +465,9 @@ const deadlineTypeMap = {
 }
 
 const loading = ref(false)
-const caseData = ref({ case_parties: [], case_lawyers: [], stage_logs: [], hearings: [], materials: [], deadlines: [] })
-const tab = ref('parties')
+const caseData = ref({ case_parties: [], case_lawyers: [], stage_logs: [], hearings: [], materials: [], deadlines: [], archive_versions: [], reopen_requests: [], archive: {} })
+const tab = ref(route.query.tab === 'archive' ? 'archive' : 'parties')
+const locked = computed(() => !!caseData.value.archive?.is_sealed)
 
 const partyDialog = ref(false)
 const newPartyDialog = ref(false)
@@ -662,4 +696,5 @@ onMounted(async () => {
 .tab-bar { margin-bottom: 12px; }
 .opt-sub { float: right; color: #999; font-size: 12px; }
 .current { color: #409eff; font-size: 13px; }
+.readonly-tip { color: #bbb; font-size: 12px; }
 </style>

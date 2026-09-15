@@ -10,14 +10,17 @@
       </el-col>
       <el-col :span="6">
         <el-card shadow="hover" class="stat-card">
-          <div class="stat-num">{{ data.case_total }}</div>
-          <div class="stat-label">案件总数</div>
+          <div class="stat-num">{{ data.sealed_total || 0 }}</div>
+          <div class="stat-label">已封存卷宗</div>
         </el-card>
       </el-col>
       <el-col :span="6">
-        <el-card shadow="hover" class="stat-card">
-          <div class="stat-num">{{ data.party_total }}</div>
-          <div class="stat-label">当事人</div>
+        <el-card shadow="hover" class="stat-card"
+          :class="{ warn: (data.pending_review_total || 0) > 0 }">
+          <div class="stat-num" :style="(data.pending_review_total || 0) > 0 ? 'color:#e6a23c' : ''">
+            {{ data.pending_review_total || 0 }}
+          </div>
+          <div class="stat-label">待复核卷宗</div>
         </el-card>
       </el-col>
       <el-col :span="6">
@@ -31,6 +34,37 @@
     </el-row>
 
     <el-row :gutter="16" style="margin-top: 16px">
+      <!-- 待复核卷宗 -->
+      <el-col :span="24" v-if="data.pending_review?.length">
+        <el-card shadow="never" style="margin-bottom: 16px">
+          <template #header>
+            <b>待复核卷宗</b>
+            <span class="card-sub">（等待复核人确认封存）</span>
+          </template>
+          <el-table :data="data.pending_review" size="small">
+            <el-table-column prop="case_number" label="案号" width="220" />
+            <el-table-column label="案件名称" min-width="220">
+              <template #default="{ row }">
+                <router-link :to="`/cases/${row.case_id}?tab=archive`" class="link">{{ row.case_title }}</router-link>
+              </template>
+            </el-table-column>
+            <el-table-column label="版本" width="80">
+              <template #default="{ row }">v{{ row.version_no }}</template>
+            </el-table-column>
+            <el-table-column prop="pending_count" label="未结事项" width="90" align="center" />
+            <el-table-column prop="submitted_by" label="提交人" width="100" />
+            <el-table-column prop="submitted_at" label="提交时间" width="150" />
+            <el-table-column label="操作" width="100">
+              <template #default="{ row }">
+                <router-link :to="`/cases/${row.case_id}?tab=archive`" class="link">前往复核</router-link>
+              </template>
+            </el-table-column>
+          </el-table>
+        </el-card>
+      </el-col>
+    </el-row>
+
+    <el-row :gutter="16" style="margin-top: 0">
       <!-- 期限提醒 -->
       <el-col :span="14">
         <el-card shadow="never">

@@ -12,6 +12,10 @@
 | 当事人管理 | 自然人/法人档案，证件号、联系方式 |
 | 律师管理 | 执业证号、职称、联系方式 |
 | 利益冲突检查 | ① 全局检索：按姓名/名称/证件号检查当事人在本所的全部涉诉记录，输出高/中/低风险结论；② 添加当事人到案件时自动预检，发现直接冲突（如系本所在办案件客户）将阻止保存 |
+| 结案归档 | 结案时汇总当事人、承办律师、诉讼阶段、庭期、材料、期限，**逐项登记未结事项的处置方式**，提交复核；复核人确认后封存为固定归档版本（冻结 JSON 快照，可打印） |
+| 卷宗封存 | 封存后案件及全部子记录只读，日常编辑、删除均被服务端拒绝（403），不能改写归档版本；历史版本卷宗随时可查 |
+| 重开与版本 | 再审/补充材料须**申请重开并说明原因，保留批准记录**；批准后解锁，新一轮办理结案形成新版本（v2、v3…），历史卷宗快照永久保留 |
+| 并发核对 | 提交封存时固定七分区清单指纹（基本信息/当事人/律师/阶段/庭期/材料/期限），封存瞬间在行锁内复核；期间发生变更返回 409，逐项提示变化分区与过时清单，绝不封存过时清单 |
 
 ## 快速启动
 
@@ -36,7 +40,9 @@
 │   └── cases/          核心应用
 │       ├── models.py       Lawyer / Party / Case / CaseParty / CaseLawyer
 │       │                   Hearing / StageLog / Material / Deadline
-│       ├── views.py        REST ViewSet + 工作台统计 + 冲突检查
+│       │                   ArchiveVersion / PendingItem / ReopenRequest
+│       ├── archives.py     归档领域服务：指纹 / 快照 / 未结事项 / 封存与重开状态机
+│       ├── views.py        REST ViewSet + 工作台统计 + 冲突检查 + 封存写保护
 │       └── management/commands/seed.py   样例数据
 ├── frontend/           Vue 3 + Vite + Element Plus + vue-router + axios
 │   └── src/views/      工作台 / 案件列表 / 案件详情 / 当事人 / 律师 / 冲突检查
@@ -60,4 +66,11 @@
 | GET/POST | `/api/parties/` `/api/lawyers/` | 当事人 / 律师 |
 | GET/POST | `/api/case-parties/` `/api/case-lawyers/` | 案件-当事人 / 案件-律师关联 |
 | GET/POST | `/api/hearings/` `/api/stage-logs/` `/api/materials/` `/api/deadlines/` | 开庭 / 阶段 / 材料 / 期限（支持 `?case={id}` 过滤） |
-| GET | `/api/deadlines/?upcoming=1&days=30` | 未来 N 天待办期限 |
+| GET | `/api/deadlines/?upcoming=1&days=30` | 未来 N 天待办期限（已封存案件不提醒） |
+| GET | `/api/cases/{id}/archive/prepare/` | 归档整理数据：七分区指纹 + 自动扫描未结事项（未办结期限/未签收材料/未来庭期）及已填处置 |
+| POST | `/api/cases/{id}/archive/submit/` | 提交复核（结案日期/摘要/逐项处置），固定提交时清单指纹 |
+| POST | `/api/cases/{id}/archive/confirm/` | 复核人确认封存；行锁内复核指纹与清单，过期返回 **409**（changed_sections / stale_items） |
+| POST | `/api/cases/{id}/archive/reject/` `/archive/cancel/` | 复核退回（版本号不变）/ 提交人撤回 |
+| GET | `/api/archive-versions/?case={id}` | 卷宗版本列表（封存版本含不可变 snapshot 快照） |
+| POST | `/api/cases/{id}/reopen/` 或 `/api/reopen-requests/` | 申请重开（再审/补充材料，须审批） |
+| POST | `/api/reopen-requests/{id}/approve/` `/reject/` | 审批重开；批准后案件解锁，旧封存版本转为历史版本 |

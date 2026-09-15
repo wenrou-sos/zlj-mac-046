@@ -4,8 +4,10 @@ from datetime import date, datetime, timedelta
 from django.core.management.base import BaseCommand
 from django.utils import timezone
 
-from cases.models import (Case, CaseLawyer, CaseParty, Deadline, Hearing,
-                          Lawyer, Material, Party, StageLog)
+from cases import archives
+from cases.models import (ArchiveVersion, Case, CaseLawyer, CaseParty, Deadline,
+                          Hearing, Lawyer, Material, Party, PendingItem,
+                          ReopenRequest, StageLog)
 
 TODAY = date.today()
 
@@ -25,7 +27,8 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         # 清空旧数据（顺序：关联表 -> 主表）
-        for model in (Hearing, StageLog, Material, Deadline,
+        for model in (ReopenRequest, PendingItem, ArchiveVersion,
+                      Hearing, StageLog, Material, Deadline,
                       CaseParty, CaseLawyer, Case, Party, Lawyer):
             model.objects.all().delete()
 
@@ -222,8 +225,21 @@ class Command(BaseCommand):
             Deadline.objects.create(case=case, title=title, deadline_type=dtype,
                                     due_date=d(days), is_done=done, notes=notes)
 
+        # ---------- 结案归档演示：c8 已整理、复核、封存 ----------
+        archives.submit_archive(c8, {
+            'closed_date': d(-90),
+            'summary': '双方在法院主持下达成调解，被告已按调解书约定按期履行全部'
+                       '还款义务，双方均未上诉，案件以调解方式结案并归档。',
+            'prepared_by': '赵国庆',
+            'submitted_by': '赵国庆',
+            'pending_items': [],
+        })
+        v1 = ArchiveVersion.objects.get(case=c8)
+        archives.confirm_archive(c8, v1.version_no, '张伟民', '材料齐全，同意封存归档')
+
         self.stdout.write(self.style.SUCCESS(
             f'样例数据已生成：{Lawyer.objects.count()}名律师、'
             f'{Party.objects.count()}个当事人、{Case.objects.count()}个案件、'
             f'{Hearing.objects.count()}次开庭、{Material.objects.count()}份材料、'
-            f'{Deadline.objects.count()}项期限'))
+            f'{Deadline.objects.count()}项期限、'
+            f'{ArchiveVersion.objects.filter(status="sealed").count()}份已封存卷宗'))

@@ -1,4 +1,5 @@
 from django.db import models
+from django.utils import timezone
 
 
 class Lawyer(models.Model):
@@ -15,6 +16,7 @@ class Lawyer(models.Model):
     phone = models.CharField('电话', max_length=20, blank=True)
     email = models.EmailField('邮箱', blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField('更新时间', auto_now=True)
 
     class Meta:
         ordering = ['id']
@@ -36,6 +38,7 @@ class Party(models.Model):
     address = models.CharField('地址', max_length=200, blank=True)
     notes = models.TextField('备注', blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField('更新时间', auto_now=True)
 
     class Meta:
         ordering = ['id']
@@ -73,12 +76,58 @@ class Case(models.Model):
     lawyers = models.ManyToManyField(Lawyer, through='CaseLawyer', related_name='cases')
     parties = models.ManyToManyField(Party, through='CaseParty', related_name='cases')
     created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField('更新时间', auto_now=True)
 
     class Meta:
         ordering = ['-id']
 
     def __str__(self):
         return f'{self.case_number} {self.title}'
+
+    def _archive_versions_cached(self):
+        """命中 prefetch 时返回缓存列表，否则返回 None"""
+        cache = getattr(self, '_prefetched_objects_cache', None)
+        if cache and 'archive_versions' in cache:
+            return list(cache['archive_versions'])
+        return None
+
+    def get_archive_versions(self):
+        cached = self._archive_versions_cached()
+        if cached is not None:
+            return sorted(cached, key=lambda v: v.version_no, reverse=True)
+        return list(self.archive_versions.order_by('-version_no'))
+
+    def get_current_archive(self):
+        """当前卷宗版本（最新版本，无论处于何种状态）"""
+        versions = self._archive_versions_cached()
+        if versions is not None:
+            return max(versions, key=lambda v: v.version_no) if versions else None
+        return self.archive_versions.order_by('-version_no').first()
+
+    def get_sealed_archive(self):
+        """已封存卷宗（同一时刻至多一个）"""
+        versions = self._archive_versions_cached()
+        if versions is not None:
+            sealed = [v for v in versions if v.status == 'sealed']
+            return max(sealed, key=lambda v: v.version_no) if sealed else None
+        return self.archive_versions.filter(status='sealed').order_by('-version_no').first()
+
+    @property
+    def is_sealed(self):
+        return self.get_sealed_archive() is not None
+
+    def archive_info(self):
+        """供序列化器使用的归档状态摘要"""
+        current = self.get_current_archive()
+        sealed = self.get_sealed_archive()
+        return {
+            'is_sealed': self.is_sealed,
+            'has_archive': current is not None,
+            'current_version': current.version_no if current else None,
+            'current_status': current.status if current else None,
+            'current_status_display': current.get_status_display() if current else None,
+            'sealed_version': sealed.version_no if sealed else None,
+        }
 
 
 class CaseParty(models.Model):
@@ -98,6 +147,7 @@ class CaseParty(models.Model):
     party = models.ForeignKey(Party, on_delete=models.CASCADE)
     role = models.CharField('诉讼地位', max_length=20, choices=ROLE_CHOICES)
     is_client = models.BooleanField('是否本所客户', default=False)
+    updated_at = models.DateTimeField('更新时间', auto_now=True)
 
     class Meta:
         unique_together = ('case', 'party', 'role')
@@ -115,6 +165,7 @@ class CaseLawyer(models.Model):
     case = models.ForeignKey(Case, on_delete=models.CASCADE)
     lawyer = models.ForeignKey(Lawyer, on_delete=models.CASCADE)
     role = models.CharField('承办角色', max_length=10, choices=ROLE_CHOICES, default='lead')
+    updated_at = models.DateTimeField('更新时间', auto_now=True)
 
     class Meta:
         unique_together = ('case', 'lawyer')
@@ -131,6 +182,7 @@ class Hearing(models.Model):
     judge = models.CharField('承办法官/仲裁员', max_length=50, blank=True)
     notes = models.TextField('备注', blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField('更新时间', auto_now=True)
 
     class Meta:
         ordering = ['hearing_time']
@@ -146,6 +198,7 @@ class StageLog(models.Model):
     log_date = models.DateField('日期')
     notes = models.TextField('备注', blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField('更新时间', auto_now=True)
 
     class Meta:
         ordering = ['log_date', 'id']
@@ -168,6 +221,7 @@ class Material(models.Model):
     status = models.CharField('状态', max_length=20, choices=STATUS_CHOICES, default='pending')
     notes = models.TextField('备注', blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField('更新时间', auto_now=True)
 
     class Meta:
         ordering = ['-id']
@@ -196,9 +250,130 @@ class Deadline(models.Model):
     is_done = models.BooleanField('已办结', default=False)
     notes = models.TextField('备注', blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField('更新时间', auto_now=True)
 
     class Meta:
         ordering = ['due_date']
 
     def __str__(self):
         return f'{self.title}({self.due_date})'
+
+
+class ArchiveVersion(models.Model):
+    """卷宗归档版本：整理提交 -> 复核封存；封存后快照不可变"""
+    STATUS_CHOICES = [
+        ('draft', '整理中'),
+        ('submitted', '待复核'),
+        ('sealed', '已封存'),
+        ('rejected', '复核退回'),
+        ('reopened', '已重开(历史版本)'),
+    ]
+    REOPEN_REASON_CHOICES = [
+        ('retrial', '再审'),
+        ('supplement', '补充材料'),
+        ('other', '其他'),
+    ]
+    case = models.ForeignKey(Case, on_delete=models.CASCADE,
+                             related_name='archive_versions')
+    version_no = models.PositiveIntegerField('版本号', default=1)
+    status = models.CharField('状态', max_length=20, choices=STATUS_CHOICES, default='draft')
+
+    # 提交/封存时的案件信息
+    closed_date = models.DateField('结案日期', null=True, blank=True)
+    summary = models.TextField('结案摘要', blank=True)
+    fingerprint = models.CharField('清单指纹', max_length=64, blank=True)
+    fingerprint_state = models.JSONField('分区指纹明细', default=dict, blank=True)
+
+    # 人员记录（无用户体系，留姓名）
+    prepared_by = models.CharField('整理人', max_length=50, blank=True)
+    submitted_by = models.CharField('提交人', max_length=50, blank=True)
+    submitted_at = models.DateTimeField('提交时间', null=True, blank=True)
+    reviewer = models.CharField('复核人', max_length=50, blank=True)
+    review_comment = models.TextField('复核意见', blank=True)
+    sealed_at = models.DateTimeField('封存时间', null=True, blank=True)
+    reject_reason = models.TextField('退回原因', blank=True)
+
+    # 封存时冻结的完整卷宗快照
+    snapshot = models.JSONField('归档快照', default=dict, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-version_no']
+        unique_together = ('case', 'version_no')
+
+    def __str__(self):
+        return f'{self.case.case_number} 卷宗v{self.version_no}（{self.get_status_display()}）'
+
+
+class PendingItem(models.Model):
+    """卷宗整理时逐项登记的未结事项及处置说明"""
+    KIND_CHOICES = [
+        ('deadline', '未办结期限'),
+        ('material', '未结材料'),
+        ('hearing', '未来庭期'),
+        ('custom', '其他事项'),
+    ]
+    DISPOSITION_CHOICES = [
+        ('completed', '已完成'),
+        ('handover', '已移交处理'),
+        ('followup', '继续跟进'),
+        ('waived', '当事人放弃/终结'),
+        ('other', '其他处置'),
+    ]
+    archive_version = models.ForeignKey(ArchiveVersion, on_delete=models.CASCADE,
+                                        related_name='pending_items')
+    kind = models.CharField('事项类别', max_length=20, choices=KIND_CHOICES)
+    ref_id = models.PositiveIntegerField('关联记录ID', null=True, blank=True)
+    item_key = models.CharField('事项键', max_length=60)
+    title = models.CharField('事项', max_length=200)
+    detail = models.CharField('详情', max_length=300, blank=True)
+    disposition = models.CharField('处置方式', max_length=20,
+                                   choices=DISPOSITION_CHOICES, blank=True)
+    disposition_note = models.TextField('处置说明', blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['kind', 'id']
+        unique_together = ('archive_version', 'item_key')
+
+    def __str__(self):
+        return f'v{self.archive_version.version_no}-{self.title}'
+
+
+class ReopenRequest(models.Model):
+    """卷宗重开申请（再审/补充材料），批准后产生新一轮办理"""
+    REASON_CHOICES = [
+        ('retrial', '再审'),
+        ('supplement', '补充材料'),
+        ('other', '其他'),
+    ]
+    STATUS_CHOICES = [
+        ('pending', '待审批'),
+        ('approved', '已批准'),
+        ('rejected', '未批准'),
+    ]
+    case = models.ForeignKey(Case, on_delete=models.CASCADE,
+                             related_name='reopen_requests')
+    archive_version = models.ForeignKey(ArchiveVersion, on_delete=models.SET_NULL,
+                                        null=True, blank=True, related_name='reopen_requests',
+                                        verbose_name='申请时卷宗版本')
+    reason_type = models.CharField('重开原因', max_length=20, choices=REASON_CHOICES)
+    reason = models.TextField('原因说明')
+    applicant = models.CharField('申请人', max_length=50, blank=True)
+    status = models.CharField('审批状态', max_length=20, choices=STATUS_CHOICES, default='pending')
+    approver = models.CharField('批准人', max_length=50, blank=True)
+    approval_comment = models.TextField('审批意见', blank=True)
+    next_stage = models.CharField('重开后阶段', max_length=20,
+                                  choices=Case.STAGE_CHOICES, default='retrial')
+    decided_at = models.DateTimeField('审批时间', null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-id']
+
+    def __str__(self):
+        return f'{self.case.case_number} 重开申请-{self.get_status_display()}'
