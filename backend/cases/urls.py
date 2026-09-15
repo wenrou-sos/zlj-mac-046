@@ -13,6 +13,7 @@ router.register('hearings', views.HearingViewSet, basename='hearing')
 router.register('stage-logs', views.StageLogViewSet, basename='stage-log')
 router.register('materials', views.MaterialViewSet, basename='material')
 router.register('deadlines', views.DeadlineViewSet, basename='deadline')
+router.register('conflict-reviews', views.ConflictReviewViewSet, basename='conflict-review')
 
 urlpatterns = [
     path('', include(router.urls)),

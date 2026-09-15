@@ -1,7 +1,8 @@
 from django.contrib import admin
 
-from .models import (Case, CaseLawyer, CaseParty, Deadline, Hearing, Lawyer,
-                     Material, Party, StageLog)
+from .models import (Case, CaseLawyer, CaseParty, ConflictReview,
+                     ConflictReviewLog, ConflictReviewMaterial, Deadline,
+                     Hearing, Lawyer, Material, Party, StageLog)
 
 
 class CasePartyInline(admin.TabularInline):
@@ -36,3 +37,32 @@ class PartyAdmin(admin.ModelAdmin):
 
 
 admin.site.register([Hearing, StageLog, Material, Deadline])
+
+
+class ConflictReviewMaterialInline(admin.TabularInline):
+    model = ConflictReviewMaterial
+    extra = 0
+    readonly_fields = ('uploaded_by', 'uploaded_at')
+
+
+class ConflictReviewLogInline(admin.TabularInline):
+    model = ConflictReviewLog
+    extra = 0
+    readonly_fields = ('action', 'actor', 'actor_name', 'detail', 'created_at')
+    can_delete = False
+
+    def has_add_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(ConflictReview)
+class ConflictReviewAdmin(admin.ModelAdmin):
+    list_display = ('review_number', 'case', 'party', 'proposed_role',
+                    'risk_level', 'status', 'applicant', 'reviewer',
+                    'exception_expire_date', 'created_at')
+    list_filter = ('status', 'risk_level', 'has_prohibited', 'needs_exception')
+    search_fields = ('review_number', 'party__name', 'case__case_number', 'case__title')
+    readonly_fields = ('review_number', 'snapshot', 'relationship_fingerprint',
+                       'risk_level', 'has_prohibited', 'needs_exception',
+                       'used_at', 'used_by', 'superseded_by', 'created_at', 'updated_at')
+    inlines = [ConflictReviewMaterialInline, ConflictReviewLogInline]

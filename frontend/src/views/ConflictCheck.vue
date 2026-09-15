@@ -72,24 +72,54 @@
             </template>
           </el-table-column>
         </el-table>
+
+        <div class="result-foot">
+          <el-button type="primary" size="small" :disabled="!identity.lawyerId"
+            @click="openApply(r.party)">
+            据此发起冲突复核申请
+          </el-button>
+          <span v-if="!identity.lawyerId" class="sub">请先在右上角选择当前律师</span>
+          <router-link to="/conflict-reviews" class="link sub-link">查看复核单列表</router-link>
+        </div>
       </el-card>
     </template>
+
+    <ApplyReviewDialog v-model="applyVisible" :preset-party="applyParty" @created="onCreated" />
   </div>
 </template>
 
 <script setup>
 import { ref } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import api from '../api'
+import { identity } from '../identity'
+import ApplyReviewDialog from '../components/ApplyReviewDialog.vue'
 
+const router = useRouter()
 const name = ref('')
 const idNumber = ref('')
 const loading = ref(false)
 const checked = ref(false)
 const results = ref([])
+const applyVisible = ref(false)
+const applyParty = ref(null)
 
 const riskType = (r) => ({ high: 'danger', medium: 'warning', low: 'success' }[r])
 const riskText = (r) => ({ high: '高风险：存在利益冲突', medium: '需关注', low: '低风险' }[r])
+
+function openApply(party) {
+  if (!identity.lawyerId) {
+    ElMessage.warning('请先在右上角选择当前操作律师')
+    return
+  }
+  applyParty.value = party
+  applyVisible.value = true
+}
+
+function onCreated(created) {
+  router.push(`/conflict-reviews/${created.id}`)
+}
 
 async function check() {
   if (!name.value && !idNumber.value) {
@@ -114,4 +144,6 @@ async function check() {
 .meta { color: #999; font-size: 12px; margin-left: 10px; font-weight: normal; }
 .link { color: #409eff; text-decoration: none; }
 .sub { color: #999; font-size: 12px; }
+.result-foot { margin-top: 12px; display: flex; align-items: center; gap: 12px; }
+.sub-link { font-size: 13px; }
 </style>

@@ -4,8 +4,9 @@ from datetime import date, datetime, timedelta
 from django.core.management.base import BaseCommand
 from django.utils import timezone
 
-from cases.models import (Case, CaseLawyer, CaseParty, Deadline, Hearing,
-                          Lawyer, Material, Party, StageLog)
+from cases.models import (Case, CaseLawyer, CaseParty, ConflictReview,
+                          ConflictReviewLog, ConflictReviewMaterial, Deadline,
+                          Hearing, Lawyer, Material, Party, StageLog)
 
 TODAY = date.today()
 
@@ -24,9 +25,11 @@ class Command(BaseCommand):
     help = '清空并重建律所样例数据'
 
     def handle(self, *args, **options):
-        # 清空旧数据（顺序：关联表 -> 主表）
+        # 清空旧数据（顺序：关联表 -> 主表；复核单对案件/当事人/律师为 PROTECT，须先删）
         for model in (Hearing, StageLog, Material, Deadline,
-                      CaseParty, CaseLawyer, Case, Party, Lawyer):
+                      CaseParty, CaseLawyer,
+                      ConflictReviewLog, ConflictReviewMaterial, ConflictReview,
+                      Case, Party, Lawyer):
             model.objects.all().delete()
 
         # ---------- 律师 ----------

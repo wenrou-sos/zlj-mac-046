@@ -3,6 +3,12 @@ import { ElMessage } from 'element-plus'
 
 const api = axios.create({ baseURL: '/api', timeout: 15000 })
 
+api.interceptors.request.use((config) => {
+  const lawyerId = localStorage.getItem('current_lawyer_id')
+  if (lawyerId) config.headers['X-Lawyer-Id'] = lawyerId
+  return config
+})
+
 api.interceptors.response.use(
   (res) => res,
   (err) => {
@@ -14,6 +20,7 @@ api.interceptors.response.use(
       const first = Object.values(detail)[0]
       msg = Array.isArray(first) ? first[0] : String(first)
     }
+    err.friendlyMessage = msg
     ElMessage.error(msg)
     return Promise.reject(err)
   }

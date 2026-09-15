@@ -1,4 +1,5 @@
 from django.db import models
+from django.utils import timezone
 
 
 class Lawyer(models.Model):
@@ -202,3 +203,133 @@ class Deadline(models.Model):
 
     def __str__(self):
         return f'{self.title}({self.due_date})'
+
+
+class ConflictReview(models.Model):
+    """利益冲突复核单：把一次冲突检查固化为可追溯的审批记录。
+
+    申请时即冻结当事人身份、拟承接涉案关系与风险依据快照（JSON），
+    审批结论、例外授权依据、适用期限以及承接使用情况均留痕；
+    关系变更导致风险指纹变化后，旧单作废并可经 superseded_by 接续。
+    """
+    STATUS_CHOICES = [
+        ('pending', '待复核'),
+        ('approved', '已批准'),
+        ('rejected', '已拒绝'),
+        ('returned', '退回补充材料'),
+        ('superseded', '已重新复核'),
+        ('invalid', '已失效(关系变更)'),
+    ]
+
+    review_number = models.CharField('复核单号', max_length=30, unique=True, blank=True)
+    case = models.ForeignKey(Case, on_delete=models.PROTECT, related_name='conflict_reviews',
+                             verbose_name='目标案件')
+    party = models.ForeignKey(Party, on_delete=models.PROTECT, related_name='conflict_reviews',
+                              verbose_name='拟承接当事人')
+    proposed_role = models.CharField('拟列诉讼地位', max_length=20, choices=CaseParty.ROLE_CHOICES)
+    proposed_is_client = models.BooleanField('是否拟作为本所客户', default=False)
+
+    applicant = models.ForeignKey(Lawyer, on_delete=models.PROTECT, related_name='applied_reviews',
+                                  verbose_name='申请人')
+    reviewer = models.ForeignKey(Lawyer, on_delete=models.PROTECT, related_name='assigned_reviews',
+                                 verbose_name='指定复核人')
+    apply_remark = models.TextField('申请说明', blank=True)
+
+    # 申请时冻结的当事人身份 / 涉案关系 / 风险依据快照
+    snapshot = models.JSONField('风险依据快照', default=dict)
+    risk_level = models.CharField('风险等级', max_length=10, default='low')
+    has_prohibited = models.BooleanField('含本所禁止性冲突', default=False)
+    needs_exception = models.BooleanField('须例外授权', default=False)
+    relationship_fingerprint = models.CharField('关系指纹', max_length=64, blank=True, db_index=True)
+
+    status = models.CharField('状态', max_length=20, choices=STATUS_CHOICES, default='pending',
+                              db_index=True)
+    # 复核结论
+    decision_remark = models.TextField('复核意见', blank=True)
+    exception_basis = models.TextField('例外授权依据', blank=True)
+    exception_expire_date = models.DateField('例外适用期限', null=True, blank=True)
+    decided_at = models.DateTimeField('决定时间', null=True, blank=True)
+
+    # 承接闸门：批准结论被实际承接使用的记录
+    used_at = models.DateTimeField('承接使用时间', null=True, blank=True)
+    used_by = models.ForeignKey(Lawyer, on_delete=models.PROTECT, null=True, blank=True,
+                                related_name='used_reviews', verbose_name='承接经办人')
+
+    # 关系变更后进入重新复核的接续链
+    superseded_by = models.ForeignKey('self', on_delete=models.SET_NULL, null=True, blank=True,
+                                      related_name='superseded_reviews', verbose_name='重新复核单')
+    created_at = models.DateTimeField('申请时间', auto_now_add=True)
+    updated_at = models.DateTimeField('更新时间', auto_now=True)
+
+    class Meta:
+        ordering = ['-id']
+
+    def __str__(self):
+        return self.review_number or f'复核单#{self.pk}'
+
+    def save(self, *args, **kwargs):
+        if not self.review_number:
+            seq = ConflictReview.objects.filter(
+                created_at__date=timezone.localdate()).count() + 1
+            self.review_number = f'CR{timezone.localdate():%Y%m%d}{seq:03d}'
+            # 同日并发兜底，保证唯一
+            while ConflictReview.objects.filter(review_number=self.review_number)\
+                    .exclude(pk=self.pk).exists():
+                seq += 1
+                self.review_number = f'CR{timezone.localdate():%Y%m%d}{seq:03d}'
+        super().save(*args, **kwargs)
+
+    @property
+    def is_active_approval(self):
+        """批准结论当前是否仍然有效（未使用 / 未到期 / 未被重新复核）。"""
+        return (self.status == 'approved'
+                and self.used_at is None
+                and (self.exception_expire_date is None
+                     or self.exception_expire_date >= timezone.localdate()))
+
+
+class ConflictReviewMaterial(models.Model):
+    """复核依据材料：申请时提交、退回后补充，全程保留。"""
+    review = models.ForeignKey(ConflictReview, on_delete=models.CASCADE,
+                               related_name='materials', verbose_name='复核单')
+    name = models.CharField('材料名称', max_length=200)
+    material_type = models.CharField('材料类型', max_length=50, blank=True)
+    source = models.CharField('来源/出具方', max_length=200, blank=True)
+    remark = models.TextField('说明', blank=True)
+    uploaded_by = models.ForeignKey(Lawyer, on_delete=models.PROTECT,
+                                    related_name='review_materials', verbose_name='提交人')
+    uploaded_at = models.DateTimeField('提交时间', auto_now_add=True)
+
+    class Meta:
+        ordering = ['id']
+
+    def __str__(self):
+        return self.name
+
+
+class ConflictReviewLog(models.Model):
+    """复核单全过程流水：申请、补材料、批准、拒绝、退回、作废、承接使用。"""
+    ACTION_CHOICES = [
+        ('apply', '提交申请'),
+        ('supplement', '补充材料'),
+        ('approve', '批准'),
+        ('reject', '拒绝'),
+        ('return', '退回补充材料'),
+        ('supersede', '重新复核'),
+        ('invalidate', '关系变更失效'),
+        ('use', '承接使用'),
+    ]
+    review = models.ForeignKey(ConflictReview, on_delete=models.CASCADE,
+                               related_name='logs', verbose_name='复核单')
+    action = models.CharField('动作', max_length=20, choices=ACTION_CHOICES)
+    actor = models.ForeignKey(Lawyer, on_delete=models.PROTECT, null=True, blank=True,
+                              related_name='review_logs', verbose_name='操作人')
+    actor_name = models.CharField('操作人姓名(留痕)', max_length=50, blank=True)
+    detail = models.TextField('详情', blank=True)
+    created_at = models.DateTimeField('时间', auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ['id']
+
+    def __str__(self):
+        return f'{self.review} {self.get_action_display()}'

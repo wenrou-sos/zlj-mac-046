@@ -212,11 +212,11 @@
     </template>
 
     <!-- 添加当事人对话框 -->
-    <el-dialog v-model="partyDialog" title="添加当事人" width="560px">
+    <el-dialog v-model="partyDialog" title="添加当事人（承接）" width="560px">
       <el-alert
         type="warning"
         :closable="false"
-        title="保存前将自动进行利益冲突预检"
+        title="承接须凭当前有效的批准复核单：系统会核对未使用、例外未到期、涉案关系未变更。无有效单请先发起冲突复核。"
         style="margin-bottom: 12px"
       />
       <el-form label-width="100px">
@@ -247,10 +247,24 @@
         <el-form-item label="本所客户">
           <el-switch v-model="partyForm.is_client" active-text="是" inactive-text="否" />
         </el-form-item>
+        <el-form-item label="复核单">
+          <el-select v-model="partyForm.review_id" placeholder="选择本案该当事人的有效批准单" style="width: 100%">
+            <el-option
+              v-for="rv in usableReviews"
+              :key="rv.id"
+              :label="`${rv.review_number}（${rv.status_display}${rv.exception_expire_date ? '·例外至' + rv.exception_expire_date : ''}）`"
+              :value="rv.id"
+            />
+          </el-select>
+          <div v-if="partyForm.party_id && !usableReviews.length" class="form-hint">
+            暂无有效批准复核单，请先发起冲突复核，经独立复核人批准后再承接。
+          </div>
+        </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="partyDialog = false">取消</el-button>
-        <el-button type="primary" :loading="partySaving" @click="addParty">冲突预检并保存</el-button>
+        <el-button @click="openApplyFromParty" :disabled="!identity.lawyerId">发起冲突复核</el-button>
+        <el-button type="success" :loading="partySaving" @click="addParty">凭批准单承接</el-button>
       </template>
     </el-dialog>
 
@@ -382,8 +396,7 @@
     </el-dialog>
 
     <!-- 期限对话框 -->
-    <el-dialog v-model="deadlineDialog" title="添加期限提醒" width="440px">
-      <el-form label-width="90px">
+    <el-dialog v-model="deadlineDialog" title="添加期限提醒" width="440px">      <el-form label-width="90px">
         <el-form-item label="事项" required>
           <el-input v-model="deadlineForm.title" placeholder="如 举证期限届满" />
         </el-form-item>
@@ -408,14 +421,25 @@
         <el-button type="primary" @click="addDeadline">保存</el-button>
       </template>
     </el-dialog>
+    <!-- 发起冲突复核（承接前） -->
+    <ApplyReviewDialog
+      v-model="applyReviewVisible"
+      :preset-case="Number(caseId)"
+      :preset-party="partyForm.party_id"
+      :preset-role="partyForm.role"
+      :preset-is-client="partyForm.is_client"
+      @created="onReviewCreated"
+    />
   </div>
 </template>
 
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import api from '../api'
+import { identity } from '../identity'
+import ApplyReviewDialog from '../components/ApplyReviewDialog.vue'
 
 const route = useRoute()
 const caseId = route.params.id
@@ -448,7 +472,9 @@ const partySearching = ref(false)
 const partySaving = ref(false)
 const allLawyers = ref([])
 
-const partyForm = reactive({ party_id: null, role: 'plaintiff', is_client: false })
+const partyForm = reactive({ party_id: null, role: 'plaintiff', is_client: false, review_id: null })
+const partyReviews = ref([])
+const applyReviewVisible = ref(false)
 const newParty = reactive({ name: '', party_type: 'person', id_number: '', phone: '', address: '' })
 const lawyerForm = reactive({ lawyer_id: null, role: 'lead' })
 const stageForm = reactive({ stage: '', log_date: '', notes: '' })
@@ -471,13 +497,46 @@ async function load() {
   }
 }
 
-/* ---------- 当事人 ---------- */
+/* ---------- 当事人（承接：凭有效批准复核单） ---------- */
+const usableReviews = computed(() =>
+  partyReviews.value
+    .filter((rv) => rv.status === 'approved' && rv.is_active)
+    .filter((rv) => !partyForm.role || rv.proposed_role === partyForm.role)
+    .filter((rv) => rv.proposed_is_client === partyForm.is_client))
+
+watch(() => partyForm.party_id, async (pid) => {
+  partyForm.review_id = null
+  partyReviews.value = []
+  if (!pid) return
+  const res = await api.get('/conflict-reviews/', { params: { case: caseId, party: pid } })
+  partyReviews.value = res.data
+  const usable = res.data.find((rv) => rv.status === 'approved' && rv.is_active
+    && rv.proposed_role === partyForm.role
+    && rv.proposed_is_client === partyForm.is_client)
+  if (usable) partyForm.review_id = usable.id
+})
+
 function openPartyDialog() {
   partyForm.party_id = null
   partyForm.role = 'plaintiff'
   partyForm.is_client = false
+  partyForm.review_id = null
+  partyReviews.value = []
   searchParties('')
   partyDialog.value = true
+}
+
+function openApplyFromParty() {
+  if (!partyForm.party_id) {
+    ElMessage.warning('请先选择当事人')
+    return
+  }
+  applyReviewVisible.value = true
+}
+
+function onReviewCreated(created) {
+  ElMessage.info('复核申请已提交，批准后回到本对话框选择该复核单承接')
+  partyReviews.value.unshift(created)
 }
 
 async function searchParties(kw) {
@@ -508,40 +567,24 @@ async function addParty() {
     ElMessage.warning('请选择当事人')
     return
   }
+  if (!partyForm.review_id) {
+    ElMessage.warning('请选择有效的批准复核单，或先发起冲突复核')
+    return
+  }
   partySaving.value = true
   try {
-    // 1. 利益冲突预检
-    const check = await api.post(`/cases/${caseId}/conflict-check/`, {
+    await api.post('/case-parties/', {
+      case: Number(caseId),
       party_id: partyForm.party_id,
+      role: partyForm.role,
       is_client: partyForm.is_client,
+      review_id: partyForm.review_id,
     })
-    const { has_conflict, conflicts } = check.data
-    if (conflicts.length) {
-      const html = conflicts
-        .map((c) => `<p style="color:${{ high: '#f56c6c', medium: '#e6a23c' }[c.level] || '#909399'}">【${{ high: '高风险', medium: '注意', low: '提示' }[c.level]}】${c.message}</p>`)
-        .join('')
-      if (has_conflict) {
-        await ElMessageBox.alert(html, '利益冲突预检未通过', {
-          dangerouslyUseHTMLString: true,
-          confirmButtonText: '知道了',
-          type: 'error',
-        })
-        return
-      }
-      await ElMessageBox.confirm(html, '冲突预检提示', {
-        dangerouslyUseHTMLString: true,
-        confirmButtonText: '仍要添加',
-        cancelButtonText: '取消',
-        type: 'warning',
-      })
-    }
-    // 2. 保存
-    await api.post('/case-parties/', { case: Number(caseId), ...partyForm })
-    ElMessage.success('当事人已添加')
+    ElMessage.success('已凭批准复核单完成承接')
     partyDialog.value = false
     load()
   } catch (e) {
-    // 用户取消，或接口错误（拦截器已提示）
+    // 拦截器已提示（结论失效/已使用/不一致等）
   } finally {
     partySaving.value = false
   }
@@ -661,5 +704,6 @@ onMounted(async () => {
 .sub { color: #999; font-size: 13px; margin-top: 4px; }
 .tab-bar { margin-bottom: 12px; }
 .opt-sub { float: right; color: #999; font-size: 12px; }
+.form-hint { color: #e6a23c; font-size: 12px; margin-top: 4px; }
 .current { color: #409eff; font-size: 13px; }
 </style>
