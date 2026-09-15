@@ -3,7 +3,7 @@ from datetime import date, timedelta
 from django.db.models import Count, Q
 from django.shortcuts import get_object_or_404
 from rest_framework import status, viewsets
-from rest_framework.decorators import api_view
+from rest_framework.decorators import action, api_view
 from rest_framework.response import Response
 
 from .models import (Case, CaseLawyer, CaseParty, Deadline, Hearing, Lawyer,
@@ -61,6 +61,48 @@ class CaseViewSet(viewsets.ModelViewSet):
         if self.action in ('create', 'update', 'partial_update'):
             return CaseWriteSerializer
         return CaseListSerializer
+
+    @action(detail=True, methods=['post'], url_path='conflict-check')
+    def conflict_check(self, request, pk=None):
+        """向本案添加当事人前的利益冲突预检
+
+        POST /api/cases/{id}/conflict-check/  {party_id, is_client}
+        """
+        case = self.get_object()
+        party = get_object_or_404(Party, pk=request.data.get('party_id'))
+        is_client = bool(request.data.get('is_client'))
+
+        conflicts = []
+        existing = CaseParty.objects.filter(case=case, party=party).first()
+        if existing:
+            conflicts.append({
+                'level': 'high',
+                'message': f'该当事人已是本案{existing.get_role_display()}，请勿重复添加',
+            })
+
+        for cp in (CaseParty.objects.filter(party=party).exclude(case=case)
+                   .select_related('case')):
+            title = cp.case.title
+            if cp.is_client and cp.case.stage != 'closed' and not is_client:
+                conflicts.append({
+                    'level': 'high',
+                    'message': f'该当事人是本所在办案件「{title}」的委托客户，'
+                               f'本案拟列为对方当事人，构成直接利益冲突',
+                })
+            elif cp.is_client and is_client:
+                conflicts.append({
+                    'level': 'low',
+                    'message': f'该当事人已是本所客户（案件「{title}」），请注意信息隔离',
+                })
+            elif not cp.is_client and is_client and cp.case.stage != 'closed':
+                conflicts.append({
+                    'level': 'medium',
+                    'message': f'该当事人是本所在办案件「{title}」的对方当事人，'
+                               f'接受其委托前须进行冲突审查并取得相关方同意',
+                })
+
+        has_high = any(c['level'] == 'high' for c in conflicts)
+        return Response({'has_conflict': has_high, 'conflicts': conflicts})
 
 
 class CasePartyViewSet(viewsets.ModelViewSet):
@@ -223,43 +265,3 @@ def conflict_check(request):
         })
 
     return Response({'count': len(results), 'results': results})
-
-
-@api_view(['POST'])
-def case_party_conflict_check(request):
-    """向案件添加当事人前的冲突预检"""
-    case = get_object_or_404(Case, pk=request.data.get('case_id'))
-    party = get_object_or_404(Party, pk=request.data.get('party_id'))
-    is_client = bool(request.data.get('is_client'))
-
-    conflicts = []
-    existing = CaseParty.objects.filter(case=case, party=party).first()
-    if existing:
-        conflicts.append({
-            'level': 'high',
-            'message': f'该当事人已是本案{existing.get_role_display()}，请勿重复添加',
-        })
-
-    for cp in (CaseParty.objects.filter(party=party).exclude(case=case)
-               .select_related('case')):
-        title = cp.case.title
-        if cp.is_client and cp.case.stage != 'closed' and not is_client:
-            conflicts.append({
-                'level': 'high',
-                'message': f'该当事人是本所在办案件「{title}」的委托客户，'
-                           f'本案拟列为对方当事人，构成直接利益冲突',
-            })
-        elif cp.is_client and is_client:
-            conflicts.append({
-                'level': 'low',
-                'message': f'该当事人已是本所客户（案件「{title}」），请注意信息隔离',
-            })
-        elif not cp.is_client and is_client and cp.case.stage != 'closed':
-            conflicts.append({
-                'level': 'medium',
-                'message': f'该当事人是本所在办案件「{title}」的对方当事人，'
-                           f'接受其委托前须进行冲突审查并取得相关方同意',
-            })
-
-    has_high = any(c['level'] == 'high' for c in conflicts)
-    return Response({'has_conflict': has_high, 'conflicts': conflicts})

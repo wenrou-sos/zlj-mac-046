@@ -1,1 +1,1 @@
-/workspace/lawfirm/pgsql/bin/postgres "-D" "pgdata" "-p" "5432" "-k" "/workspace/lawfirm"
+/workspace/zlj-mac-046/pgsql/bin/postgres "-D" "pgdata" "-p" "5432" "-k" "/workspace/zlj-mac-046"

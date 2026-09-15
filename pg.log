@@ -8,3 +8,38 @@
 2026-09-14 17:06:34.590 UTC [235] LOG:  checkpoint complete: wrote 961 buffers (5.9%); 0 WAL file(s) added, 0 removed, 0 recycled; write=97.648 s, sync=0.056 s, total=97.715 s; sync files=310, longest=0.008 s, average=0.001 s; distance=4492 kB, estimate=4492 kB; lsn=0/193DB60, redo lsn=0/193DAD0
 2026-09-14 17:14:56.687 UTC [235] LOG:  checkpoint starting: time
 2026-09-14 17:15:20.935 UTC [235] LOG:  checkpoint complete: wrote 237 buffers (1.4%); 0 WAL file(s) added, 0 removed, 0 recycled; write=24.232 s, sync=0.010 s, total=24.249 s; sync files=163, longest=0.001 s, average=0.001 s; distance=1087 kB, estimate=4151 kB; lsn=0/1A4D8B0, redo lsn=0/1A4D820
+2026-09-14 17:48:35.724 UTC [535] LOG:  could not open directory "/workspace/lawfirm/pgsql/share/postgresql/timezone": No such file or directory
+2026-09-14 17:48:35.724 UTC [535] STATEMENT:  SELECT set_config('TimeZone', 'UTC', false)
+2026-09-14 17:48:35.724 UTC [535] ERROR:  invalid value for parameter "TimeZone": "UTC"
+2026-09-14 17:48:35.724 UTC [535] STATEMENT:  SELECT set_config('TimeZone', 'UTC', false)
+2026-09-14 17:50:00.273 UTC [578] LOG:  could not open directory "/workspace/lawfirm/pgsql/share/postgresql/timezone": No such file or directory
+2026-09-14 17:50:00.273 UTC [578] STATEMENT:  SELECT set_config('TimeZone', 'UTC', false)
+2026-09-14 17:50:00.273 UTC [578] ERROR:  invalid value for parameter "TimeZone": "UTC"
+2026-09-14 17:50:00.273 UTC [578] STATEMENT:  SELECT set_config('TimeZone', 'UTC', false)
+2026-09-14 17:55:09.744 UTC [626] LOG:  could not open directory "/workspace/lawfirm/pgsql/share/postgresql/timezone": No such file or directory
+2026-09-14 17:55:09.744 UTC [626] STATEMENT:  SELECT set_config('TimeZone', 'UTC', false)
+2026-09-14 17:55:09.744 UTC [626] ERROR:  invalid value for parameter "TimeZone": "UTC"
+2026-09-14 17:55:09.744 UTC [626] STATEMENT:  SELECT set_config('TimeZone', 'UTC', false)
+2026-09-14 17:56:08.022 UTC [234] LOG:  received fast shutdown request
+2026-09-14 17:56:08.023 UTC [234] LOG:  aborting any active transactions
+2026-09-14 17:56:08.024 UTC [234] LOG:  background worker "logical replication launcher" (PID 240) exited with exit code 1
+2026-09-14 17:56:08.025 UTC [235] LOG:  shutting down
+2026-09-14 17:56:08.025 UTC [235] PANIC:  could not open file "/workspace/lawfirm/pgdata/global/pg_control": No such file or directory
+2026-09-14 17:56:08.025 UTC [234] LOG:  checkpointer process (PID 235) was terminated by signal 6: Aborted
+2026-09-14 17:56:08.025 UTC [234] LOG:  terminating any other active server processes
+2026-09-14 17:56:08.025 UTC [234] LOG:  abnormal database system shutdown
+2026-09-14 17:56:08.028 UTC [234] LOG:  database system is shut down
+2026-09-14 17:56:09.168 UTC [653] LOG:  starting PostgreSQL 17.11 on aarch64-unknown-linux-gnu, compiled by gcc (Ubuntu/Linaro 7.5.0-3ubuntu1~18.04) 7.5.0, 64-bit
+2026-09-14 17:56:09.169 UTC [653] LOG:  listening on IPv6 address "::1", port 5432
+2026-09-14 17:56:09.169 UTC [653] LOG:  listening on IPv4 address "127.0.0.1", port 5432
+2026-09-14 17:56:09.171 UTC [653] LOG:  listening on Unix socket "/workspace/zlj-mac-046/.s.PGSQL.5432"
+2026-09-14 17:56:09.185 UTC [656] LOG:  database system was interrupted; last known up at 2026-09-14 17:15:20 UTC
+2026-09-14 17:56:09.276 UTC [656] LOG:  database system was not properly shut down; automatic recovery in progress
+2026-09-14 17:56:09.282 UTC [656] LOG:  redo starts at 0/1A4D820
+2026-09-14 17:56:09.282 UTC [656] LOG:  invalid record length at 0/1A4D960: expected at least 24, got 0
+2026-09-14 17:56:09.282 UTC [656] LOG:  redo done at 0/1A4D928 system usage: CPU: user: 0.00 s, system: 0.00 s, elapsed: 0.00 s
+2026-09-14 17:56:09.286 UTC [654] LOG:  checkpoint starting: end-of-recovery immediate wait
+2026-09-14 17:56:09.291 UTC [654] LOG:  checkpoint complete: wrote 3 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.002 s, sync=0.001 s, total=0.006 s; sync files=2, longest=0.001 s, average=0.001 s; distance=0 kB, estimate=0 kB; lsn=0/1A4D960, redo lsn=0/1A4D960
+2026-09-14 17:56:09.293 UTC [653] LOG:  database system is ready to accept connections
+2026-09-14 18:01:09.296 UTC [654] LOG:  checkpoint starting: time
+2026-09-14 18:01:11.175 UTC [654] LOG:  checkpoint complete: wrote 19 buffers (0.1%); 0 WAL file(s) added, 0 removed, 0 recycled; write=1.857 s, sync=0.011 s, total=1.880 s; sync files=19, longest=0.002 s, average=0.001 s; distance=21 kB, estimate=21 kB; lsn=0/1A53180, redo lsn=0/1A53128

@@ -18,6 +18,4 @@ urlpatterns = [
     path('', include(router.urls)),
     path('dashboard/', views.dashboard, name='dashboard'),
     path('conflict-check/', views.conflict_check, name='conflict-check'),
-    path('cases/conflict-check/', views.case_party_conflict_check,
-         name='case-party-conflict-check'),
 ]

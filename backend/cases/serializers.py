@@ -34,22 +34,44 @@ class CasePartySerializer(serializers.ModelSerializer):
     party = PartySerializer(read_only=True)
     party_id = serializers.PrimaryKeyRelatedField(
         queryset=Party.objects.all(), source='party', write_only=True)
+    case = serializers.PrimaryKeyRelatedField(queryset=Case.objects.all())
     role_display = serializers.CharField(source='get_role_display', read_only=True)
 
     class Meta:
         model = CaseParty
-        fields = ['id', 'party', 'party_id', 'role', 'role_display', 'is_client']
+        fields = ['id', 'case', 'party', 'party_id', 'role', 'role_display', 'is_client']
+
+
+
+    def validate(self, attrs):
+        qs = CaseParty.objects.filter(
+            case=attrs['case'], party=attrs['party'], role=attrs['role'])
+        if self.instance:
+            qs = qs.exclude(pk=self.instance.pk)
+        if qs.exists():
+            raise serializers.ValidationError(
+                {'party_id': '该当事人已以此诉讼地位存在于本案中'})
+        return attrs
 
 
 class CaseLawyerSerializer(serializers.ModelSerializer):
     lawyer = LawyerSerializer(read_only=True)
     lawyer_id = serializers.PrimaryKeyRelatedField(
         queryset=Lawyer.objects.all(), source='lawyer', write_only=True)
+    case = serializers.PrimaryKeyRelatedField(queryset=Case.objects.all())
     role_display = serializers.CharField(source='get_role_display', read_only=True)
 
     class Meta:
         model = CaseLawyer
-        fields = ['id', 'lawyer', 'lawyer_id', 'role', 'role_display']
+        fields = ['id', 'case', 'lawyer', 'lawyer_id', 'role', 'role_display']
+
+    def validate(self, attrs):
+        qs = CaseLawyer.objects.filter(case=attrs['case'], lawyer=attrs['lawyer'])
+        if self.instance:
+            qs = qs.exclude(pk=self.instance.pk)
+        if qs.exists():
+            raise serializers.ValidationError({'lawyer_id': '该律师已承办本案'})
+        return attrs
 
 
 class HearingSerializer(serializers.ModelSerializer):
