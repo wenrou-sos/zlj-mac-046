@@ -1,4 +1,110 @@
+from django.conf import settings
 from django.db import models
+from django.utils import timezone
+
+
+class UserProfile(models.Model):
+    """系统账号扩展资料：账号 -> 角色(及可选的律师档案绑定)"""
+    ROLE_CHOICES = [
+        ('admin', '管理员'),
+        ('lead', '主办律师'),
+        ('assist', '协办律师'),
+        ('reader', '只读助理'),
+    ]
+    user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+                                related_name='profile')
+    role = models.CharField('账号角色', max_length=10, choices=ROLE_CHOICES, default='reader')
+    lawyer = models.OneToOneField('Lawyer', on_delete=models.SET_NULL, null=True, blank=True,
+                                  related_name='profile', verbose_name='绑定律师档案')
+
+    class Meta:
+        verbose_name = '账号资料'
+        verbose_name_plural = '账号资料'
+
+    def __str__(self):
+        return f'{self.user.username}({self.get_role_display()})'
+
+
+class CaseAccess(models.Model):
+    """案件级访问授权（按办案团队区分可见范围的唯一依据）
+
+    来源：
+    - team  : 随承办关系(CaseLawyer)自动生成的团队授权，主办->lead、协办->assist
+    - grant : 管理员/主办律师对只读助理等账号的手动授权（可限时借阅）
+    撤权即 revoked；限时借阅到期由 valid 自动判定为失效，无需定时任务。
+    """
+    ROLE_CHOICES = [
+        ('lead', '主办律师'),
+        ('assist', '协办律师'),
+        ('reader', '只读'),
+    ]
+    SOURCE_CHOICES = [
+        ('team', '承办团队'),
+        ('grant', '手动授权'),
+    ]
+    case = models.ForeignKey('Case', on_delete=models.CASCADE, related_name='accesses')
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+                             related_name='case_accesses')
+    role = models.CharField('案件内角色', max_length=10, choices=ROLE_CHOICES, default='reader')
+    source = models.CharField('授权来源', max_length=10, choices=SOURCE_CHOICES, default='grant')
+    granted_at = models.DateTimeField('授权时间', auto_now_add=True)
+    expires_at = models.DateTimeField('借阅到期时间', null=True, blank=True)
+    revoked = models.BooleanField('已撤权', default=False)
+    revoked_at = models.DateTimeField('撤权时间', null=True, blank=True)
+
+    class Meta:
+        verbose_name = '案件授权'
+        verbose_name_plural = '案件授权'
+        unique_together = ('case', 'user')
+        ordering = ['case_id', 'role', 'user__username']
+
+    @property
+    def is_valid(self):
+        if self.revoked:
+            return False
+        if self.expires_at and self.expires_at <= timezone.now():
+            return False
+        return True
+
+    def __str__(self):
+        return f'{self.user.username} -> {self.case_id}({self.role})'
+
+
+class AuditLog(models.Model):
+    """审计日志：权限变更与敏感访问留痕"""
+    ACTION_CHOICES = [
+        ('login', '登录'),
+        ('login_failed', '登录失败'),
+        ('logout', '退出登录'),
+        ('grant', '授权'),
+        ('revoke', '撤权'),
+        ('expire', '借阅到期'),
+        ('case_view', '查看案件详情'),
+        ('conflict_check', '利益冲突检索'),
+        ('case_delete', '删除案件'),
+    ]
+    actor = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+                              null=True, blank=True, related_name='audit_actions',
+                              verbose_name='操作人')
+    action = models.CharField('动作', max_length=20, choices=ACTION_CHOICES)
+    target_user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+                                    null=True, blank=True, related_name='audit_targets',
+                                    verbose_name='被授权对象')
+    case = models.ForeignKey('Case', on_delete=models.SET_NULL, null=True, blank=True,
+                             related_name='audit_logs', verbose_name='相关案件')
+    access = models.ForeignKey('CaseAccess', on_delete=models.SET_NULL, null=True, blank=True,
+                               related_name='audit_logs', verbose_name='相关授权')
+    detail = models.CharField('详情', max_length=500, blank=True)
+    ip = models.GenericIPAddressField('IP地址', null=True, blank=True)
+    created_at = models.DateTimeField('时间', auto_now_add=True)
+
+    class Meta:
+        verbose_name = '审计日志'
+        verbose_name_plural = '审计日志'
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f'{self.created_at:%Y-%m-%d %H:%M} {self.action}'
 
 
 class Lawyer(models.Model):
@@ -35,6 +141,9 @@ class Party(models.Model):
     phone = models.CharField('联系电话', max_length=20, blank=True)
     address = models.CharField('地址', max_length=200, blank=True)
     notes = models.TextField('备注', blank=True)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+                                   null=True, blank=True, related_name='created_parties',
+                                   verbose_name='建档人')
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

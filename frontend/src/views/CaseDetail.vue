@@ -3,6 +3,11 @@
     <template v-if="caseData.id">
       <!-- 头部 -->
       <el-card shadow="never" style="margin-bottom: 16px">
+        <el-alert
+          v-if="caseData.my_access?.source === 'grant' && caseData.my_access?.expires_at"
+          type="warning" :closable="false" show-icon style="margin-bottom: 12px"
+          :title="`限时借阅：您对本案的访问权限将于 ${fmt(caseData.my_access.expires_at)} 到期，到期后自动失效`"
+        />
         <div class="head">
           <div>
             <div class="title-row">
@@ -32,7 +37,7 @@
           <!-- 当事人 -->
           <el-tab-pane :label="`当事人 (${caseData.case_parties.length})`" name="parties">
             <div class="tab-bar">
-              <el-button type="primary" size="small" @click="openPartyDialog">添加当事人</el-button>
+              <el-button v-if="editable" type="primary" size="small" @click="openPartyDialog">添加当事人</el-button>
             </div>
             <el-table :data="caseData.case_parties" size="small">
               <el-table-column label="姓名/名称" min-width="180">
@@ -51,7 +56,7 @@
               <el-table-column label="电话" width="130">
                 <template #default="{ row }">{{ row.party.phone || '-' }}</template>
               </el-table-column>
-              <el-table-column label="操作" width="80">
+              <el-table-column v-if="editable" label="操作" width="80">
                 <template #default="{ row }">
                   <el-popconfirm title="确定从本案移除该当事人？" @confirm="removeParty(row)">
                     <template #reference>
@@ -66,7 +71,7 @@
           <!-- 承办律师 -->
           <el-tab-pane :label="`承办律师 (${caseData.case_lawyers.length})`" name="lawyers">
             <div class="tab-bar">
-              <el-button type="primary" size="small" @click="lawyerDialog = true">添加承办律师</el-button>
+              <el-button v-if="editable" type="primary" size="small" @click="lawyerDialog = true">添加承办律师</el-button>
             </div>
             <el-table :data="caseData.case_lawyers" size="small">
               <el-table-column label="姓名" min-width="120">
@@ -79,9 +84,10 @@
               <el-table-column label="电话" width="140">
                 <template #default="{ row }">{{ row.lawyer.phone || '-' }}</template>
               </el-table-column>
-              <el-table-column label="操作" width="80">
+              <el-table-column v-if="editable" label="操作" width="80">
                 <template #default="{ row }">
-                  <el-popconfirm title="确定移除该承办律师？" @confirm="removeLawyer(row)">
+                  <el-popconfirm title="确定移除该承办律师？移除后其账号将立即失去本案访问权限"
+                                 @confirm="removeLawyer(row)">
                     <template #reference>
                       <el-button link type="danger" size="small">移除</el-button>
                     </template>
@@ -94,7 +100,7 @@
           <!-- 诉讼阶段 -->
           <el-tab-pane label="诉讼阶段" name="stages">
             <div class="tab-bar">
-              <el-button type="primary" size="small" @click="stageDialog = true">记录阶段流转</el-button>
+              <el-button v-if="editable" type="primary" size="small" @click="stageDialog = true">记录阶段流转</el-button>
             </div>
             <el-timeline style="padding-left: 4px; margin-top: 8px">
               <el-timeline-item
@@ -115,14 +121,14 @@
           <!-- 开庭安排 -->
           <el-tab-pane :label="`开庭安排 (${caseData.hearings.length})`" name="hearings">
             <div class="tab-bar">
-              <el-button type="primary" size="small" @click="hearingDialog = true">添加开庭</el-button>
+              <el-button v-if="editable" type="primary" size="small" @click="hearingDialog = true">添加开庭</el-button>
             </div>
             <el-table :data="caseData.hearings" size="small">
               <el-table-column prop="hearing_time" label="开庭时间" width="160" />
               <el-table-column prop="location" label="地点" min-width="200" />
               <el-table-column prop="judge" label="法官/仲裁员" width="120" />
               <el-table-column prop="notes" label="备注" min-width="160" />
-              <el-table-column label="操作" width="80">
+              <el-table-column v-if="editable" label="操作" width="80">
                 <template #default="{ row }">
                   <el-popconfirm title="确定删除该开庭安排？" @confirm="del('/hearings/', row.id)">
                     <template #reference>
@@ -137,7 +143,7 @@
           <!-- 材料 -->
           <el-tab-pane :label="`案件材料 (${caseData.materials.length})`" name="materials">
             <div class="tab-bar">
-              <el-button type="primary" size="small" @click="materialDialog = true">登记材料</el-button>
+              <el-button v-if="editable" type="primary" size="small" @click="materialDialog = true">登记材料</el-button>
             </div>
             <el-table :data="caseData.materials" size="small">
               <el-table-column prop="name" label="材料名称" min-width="200" />
@@ -148,6 +154,7 @@
               <el-table-column label="状态" width="130">
                 <template #default="{ row }">
                   <el-select
+                    v-if="editable"
                     :model-value="row.status"
                     size="small"
                     @change="(v) => updateMaterialStatus(row, v)"
@@ -156,10 +163,11 @@
                     <el-option label="已提交" value="submitted" />
                     <el-option label="已签收" value="accepted" />
                   </el-select>
+                  <span v-else>{{ row.status_display }}</span>
                 </template>
               </el-table-column>
               <el-table-column prop="notes" label="备注" min-width="140" />
-              <el-table-column label="操作" width="80">
+              <el-table-column v-if="editable" label="操作" width="80">
                 <template #default="{ row }">
                   <el-popconfirm title="确定删除该材料记录？" @confirm="del('/materials/', row.id)">
                     <template #reference>
@@ -174,7 +182,7 @@
           <!-- 期限 -->
           <el-tab-pane :label="`期限管理 (${pendingDeadlines.length})`" name="deadlines">
             <div class="tab-bar">
-              <el-button type="primary" size="small" @click="deadlineDialog = true">添加期限</el-button>
+              <el-button v-if="editable" type="primary" size="small" @click="deadlineDialog = true">添加期限</el-button>
             </div>
             <el-table :data="caseData.deadlines" size="small">
               <el-table-column prop="title" label="事项" min-width="180" />
@@ -189,7 +197,7 @@
                 </template>
               </el-table-column>
               <el-table-column prop="notes" label="备注" min-width="160" />
-              <el-table-column label="操作" width="130">
+              <el-table-column v-if="editable" label="操作" width="130">
                 <template #default="{ row }">
                   <el-button
                     v-if="!row.is_done"
@@ -203,6 +211,61 @@
                       <el-button link type="danger" size="small">删除</el-button>
                     </template>
                   </el-popconfirm>
+                </template>
+              </el-table-column>
+            </el-table>
+          </el-tab-pane>
+
+          <!-- 访问授权（管理员/主办律师） -->
+          <el-tab-pane v-if="canManageAccess" label="访问授权" name="access">
+            <div class="tab-bar">
+              <el-alert type="info" :closable="false" style="margin-right: 12px"
+                        title="承办律师随承办关系自动获得授权（团队）；其他账号可手动授权或限时借阅，撤权立即生效。" />
+              <el-button type="primary" size="small" @click="openGrantDialog">授权 / 限时借阅</el-button>
+            </div>
+            <el-table :data="accessList" size="small" v-loading="accessLoading">
+              <el-table-column label="账号" min-width="160">
+                <template #default="{ row }">
+                  <b>{{ row.display_name }}</b>
+                  <div class="sub">{{ row.username }}</div>
+                </template>
+              </el-table-column>
+              <el-table-column label="案件内角色" width="110">
+                <template #default="{ row }">
+                  <el-tag size="small" :type="row.role === 'reader' ? 'info' : 'success'">
+                    {{ row.role_display }}
+                  </el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column label="来源" width="100">
+                <template #default="{ row }">
+                  <el-tag size="small" :type="row.source === 'team' ? 'primary' : 'warning'" effect="plain">
+                    {{ row.source_display }}
+                  </el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column label="有效期" min-width="170">
+                <template #default="{ row }">
+                  <span v-if="row.expires_at">至 {{ fmt(row.expires_at) }}</span>
+                  <span v-else class="sub">长期有效</span>
+                </template>
+              </el-table-column>
+              <el-table-column label="状态" width="100">
+                <template #default="{ row }">
+                  <el-tag v-if="row.revoked" size="small" type="danger">已撤权</el-tag>
+                  <el-tag v-else-if="!row.is_valid" size="small" type="warning">已到期</el-tag>
+                  <el-tag v-else size="small" type="success">有效</el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column label="操作" width="130">
+                <template #default="{ row }">
+                  <el-button v-if="!row.revoked && row.source === 'grant'"
+                             link type="danger" size="small"
+                             @click="revokeAccess(row)">立即撤权</el-button>
+                  <el-button v-if="row.revoked && row.source === 'grant'"
+                             link type="success" size="small"
+                             @click="restoreAccess(row)">恢复</el-button>
+                  <span v-if="row.source === 'team'" class="sub">随承办关系</span>
                 </template>
               </el-table-column>
             </el-table>
@@ -408,6 +471,47 @@
         <el-button type="primary" @click="addDeadline">保存</el-button>
       </template>
     </el-dialog>
+
+    <!-- 授权 / 限时借阅对话框 -->
+    <el-dialog v-model="grantDialog" title="案件授权 / 限时借阅" width="520px">
+      <el-form label-width="100px">
+        <el-form-item label="选择账号" required>
+          <el-select v-model="grantForm.user_id" filterable placeholder="选择账号" style="width: 100%">
+            <el-option
+              v-for="u in grantableAccounts"
+              :key="u.id"
+              :value="u.id"
+              :label="`${u.display_name}（${u.username} · ${u.role_display}）`"
+            />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="案件内角色">
+          <el-radio-group v-model="grantForm.role">
+            <el-radio value="lead">主办权限（可编辑）</el-radio>
+            <el-radio value="assist">协办权限（可编辑）</el-radio>
+            <el-radio value="reader">只读</el-radio>
+          </el-radio-group>
+        </el-form-item>
+        <el-form-item label="借阅期限">
+          <el-radio-group v-model="grantForm.duration">
+            <el-radio value="permanent">长期</el-radio>
+            <el-radio value="7">7 天</el-radio>
+            <el-radio value="30">30 天</el-radio>
+            <el-radio value="custom">自定义到期时间</el-radio>
+          </el-radio-group>
+        </el-form-item>
+        <el-form-item v-if="grantForm.duration === 'custom'" label="到期时间">
+          <el-date-picker v-model="grantForm.expires_at" type="datetime"
+                          value-format="YYYY-MM-DD HH:mm" style="width: 100%" />
+        </el-form-item>
+        <el-alert type="warning" :closable="false"
+                  title="到期后该账号自动失去本案访问权限，无需手动撤权；撤权则立即生效。" />
+      </el-form>
+      <template #footer>
+        <el-button @click="grantDialog = false">取消</el-button>
+        <el-button type="primary" :loading="grantSaving" @click="submitGrant">授权</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -416,6 +520,7 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import api from '../api'
+import { auth, canEditCase } from '../auth'
 
 const route = useRoute()
 const caseId = route.params.id
@@ -433,7 +538,7 @@ const deadlineTypeMap = {
 
 const loading = ref(false)
 const caseData = ref({ case_parties: [], case_lawyers: [], stage_logs: [], hearings: [], materials: [], deadlines: [] })
-const tab = ref('parties')
+const tab = ref(route.query.tab === 'access' ? 'access' : 'parties')
 
 const partyDialog = ref(false)
 const newPartyDialog = ref(false)
@@ -458,6 +563,94 @@ const deadlineForm = reactive({ title: '', deadline_type: 'other', due_date: '',
 
 const pendingDeadlines = computed(() => caseData.value.deadlines.filter((d) => !d.is_done))
 
+const editable = computed(() => canEditCase(caseData.value))
+// 管理员或本案主办可管理授权
+const canManageAccess = computed(() =>
+  auth.user.is_admin || caseData.value.my_access?.role === 'lead')
+
+const fmt = (s) => {
+  if (!s) return ''
+  const d = new Date(String(s).length === 16 ? s.replace(' ', 'T') : s)
+  const p = (n) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
+}
+
+/* ---------- 访问授权 ---------- */
+const accessList = ref([])
+const accessLoading = ref(false)
+const grantDialog = ref(false)
+const grantSaving = ref(false)
+const allAccounts = ref([])
+const grantForm = reactive({ user_id: null, role: 'reader', duration: '7', expires_at: '' })
+
+const grantableAccounts = computed(() => allAccounts.value)
+
+async function loadAccess() {
+  accessLoading.value = true
+  try {
+    const res = await api.get('/access/', { params: { case: caseId } })
+    accessList.value = res.data
+  } finally {
+    accessLoading.value = false
+  }
+}
+
+async function openGrantDialog() {
+  if (!allAccounts.value.length) {
+    const res = await api.get('/access/grantable-users/', { params: { case: caseId } })
+    allAccounts.value = res.data
+  }
+  Object.assign(grantForm, { user_id: null, role: 'reader', duration: '7', expires_at: '' })
+  grantDialog.value = true
+}
+
+async function submitGrant() {
+  if (!grantForm.user_id) {
+    ElMessage.warning('请选择账号')
+    return
+  }
+  let expires_at = null
+  if (grantForm.duration !== 'permanent') {
+    if (grantForm.duration === 'custom') {
+      if (!grantForm.expires_at) {
+        ElMessage.warning('请选择到期时间')
+        return
+      }
+      expires_at = grantForm.expires_at
+    } else {
+      const d = new Date(Date.now() + Number(grantForm.duration) * 864e5)
+      const p = (n) => String(n).padStart(2, '0')
+      expires_at = `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
+    }
+  }
+  grantSaving.value = true
+  try {
+    await api.post('/access/grant/', {
+      case: Number(caseId),
+      user_id: grantForm.user_id,
+      role: grantForm.role,
+      expires_at,
+    })
+    ElMessage.success('授权已生效')
+    grantDialog.value = false
+    loadAccess()
+  } finally {
+    grantSaving.value = false
+  }
+}
+
+async function revokeAccess(row) {
+  await api.post(`/access/${row.id}/revoke/`)
+  ElMessage.success('已立即撤权')
+  loadAccess()
+}
+
+async function restoreAccess(row) {
+  await api.post(`/access/${row.id}/restore/`)
+  ElMessage.success('已恢复授权')
+  loadAccess()
+}
+
 const daysType = (n) => (n < 0 ? 'danger' : n <= 7 ? 'warning' : 'success')
 const daysText = (n) => (n < 0 ? `逾期${-n}天` : n === 0 ? '今天' : `${n}天`)
 
@@ -466,6 +659,9 @@ async function load() {
   try {
     const res = await api.get(`/cases/${caseId}/`)
     caseData.value = res.data
+    if (canManageAccess.value) loadAccess()
+  } catch (e) {
+    // 404 提示已由 axios 拦截器统一展示；停留在空白详情页
   } finally {
     loading.value = false
   }
@@ -648,9 +844,11 @@ async function del(url, id) {
 }
 
 onMounted(async () => {
-  load()
-  const res = await api.get('/lawyers/')
-  allLawyers.value = res.data
+  await load()
+  if (editable.value) {
+    const res = await api.get('/lawyers/')
+    allLawyers.value = res.data
+  }
 })
 </script>
 

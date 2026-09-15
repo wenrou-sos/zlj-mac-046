@@ -1,13 +1,18 @@
 """内置样例案件数据：python manage.py seed"""
 from datetime import date, datetime, timedelta
 
+from django.contrib.auth.models import User
 from django.core.management.base import BaseCommand
 from django.utils import timezone
 
-from cases.models import (Case, CaseLawyer, CaseParty, Deadline, Hearing,
-                          Lawyer, Material, Party, StageLog)
+from cases.models import (AuditLog, Case, CaseAccess, CaseLawyer, CaseParty,
+                          Deadline, Hearing, Lawyer, Material, Party, StageLog,
+                          UserProfile)
 
 TODAY = date.today()
+
+# 演示账号（admin / 律师账号 / 只读助理 密码统一为 123456）
+DEMO_PASSWORD = '123456'
 
 
 def d(days):
@@ -24,10 +29,27 @@ class Command(BaseCommand):
     help = '清空并重建律所样例数据'
 
     def handle(self, *args, **options):
-        # 清空旧数据（顺序：关联表 -> 主表）
+        # 清空旧数据（顺序：关联表 -> 主表；账号/授权/审计 -> 律师当事人）
         for model in (Hearing, StageLog, Material, Deadline,
-                      CaseParty, CaseLawyer, Case, Party, Lawyer):
+                      CaseParty, CaseLawyer, CaseAccess, AuditLog, Case,
+                      Party, Lawyer):
             model.objects.all().delete()
+        UserProfile.objects.all().delete()
+        User.objects.exclude(is_superuser=True).delete()
+
+        # ---------- 管理员 ----------
+        admin, _ = User.objects.get_or_create(
+            username='admin',
+            defaults={'is_staff': True, 'is_superuser': True,
+                      'last_name': '系统管理员'})
+        admin.is_staff = True
+        admin.is_superuser = True
+        admin.set_password(DEMO_PASSWORD)
+        admin.save()
+        profile, _ = UserProfile.objects.get_or_create(user=admin)
+        profile.role = 'admin'
+        profile.lawyer = None
+        profile.save()
 
         # ---------- 律师 ----------
         lawyers = {}
@@ -41,6 +63,25 @@ class Command(BaseCommand):
         ]:
             lawyers[name] = Lawyer.objects.create(
                 name=name, bar_number=bar, title=title, phone=phone, email=email)
+
+        # ---------- 登录账号（按角色区分访问范围） ----------
+        # username, 绑定律师, 全局角色, 显示名
+        account_specs = [
+            ('zhangwm', '张伟民', 'lead'),
+            ('lijy', '李静怡', 'lead'),
+            ('wangzq', '王志强', 'lead'),
+            ('chenxd', '陈晓东', 'assist'),
+            ('liuyf', '刘雅芳', 'assist'),
+            ('zhaogq', '赵国庆', 'assist'),
+        ]
+        users = {}
+        for username, lname, role in account_specs:
+            user = User.objects.create_user(
+                username=username, password=DEMO_PASSWORD, last_name=lname)
+            user.profile.role = role
+            user.profile.lawyer = lawyers[lname]  # 绑定后信号自动同步各案团队授权
+            user.profile.save()
+            users[lname] = user
 
         # ---------- 当事人 ----------
         parties = {}
@@ -222,8 +263,53 @@ class Command(BaseCommand):
             Deadline.objects.create(case=case, title=title, deadline_type=dtype,
                                     due_date=d(days), is_done=done, notes=notes)
 
+        # ---------- 只读助理账号 + 限时借阅/撤权示例 ----------
+        now = timezone.now()
+
+        def make_assistant(username, name):
+            user = User.objects.create_user(
+                username=username, password=DEMO_PASSWORD, last_name=name)
+            user.profile.role = 'reader'
+            user.profile.save()
+            return user
+
+        a1 = make_assistant('assistant1', '只读助理小林')
+        a2 = make_assistant('assistant2', '只读助理小周')
+        a3 = make_assistant('assistant3', '只读助理小吴')
+
+        grant1 = CaseAccess.objects.create(
+            case=c2, user=a1, role='reader', source='grant',
+            expires_at=now + timedelta(days=14))   # 有效的限时借阅
+        CaseAccess.objects.create(
+            case=c7, user=a2, role='reader', source='grant',
+            expires_at=now - timedelta(days=2))    # 已到期，自动失效
+        grant3 = CaseAccess.objects.create(
+            case=c1, user=a3, role='reader', source='grant')  # 已立即撤权示例
+        grant3.revoked = True
+        grant3.revoked_at = now
+        grant3.save(update_fields=['revoked', 'revoked_at'])
+
+        AuditLog.objects.create(
+            actor=admin, action='grant', target_user=a1, case=c2, access=grant1,
+            detail=f'{a1.last_name} 获得案件「{c2.title}」只读权限（限时借阅14天）')
+        AuditLog.objects.create(
+            actor=admin, action='grant', target_user=a2, case=c7,
+            detail=f'{a2.last_name} 获得案件「{c7.title}」只读权限（限时借阅）')
+        AuditLog.objects.create(
+            actor=admin, action='revoke', target_user=a3, case=c1,
+            detail=f'立即撤销 {a3.last_name} 对案件「{c1.title}」的访问权限')
+
         self.stdout.write(self.style.SUCCESS(
             f'样例数据已生成：{Lawyer.objects.count()}名律师、'
             f'{Party.objects.count()}个当事人、{Case.objects.count()}个案件、'
             f'{Hearing.objects.count()}次开庭、{Material.objects.count()}份材料、'
             f'{Deadline.objects.count()}项期限'))
+        self.stdout.write('演示账号（密码均为 123456）：')
+        self.stdout.write('  admin      管理员（可见全部案件）')
+        self.stdout.write('  zhangwm    主办张伟民 | lijy 主办李静怡 | '
+                          'wangzq 主办王志强')
+        self.stdout.write('  chenxd 协办陈晓东 | liuyf 协办刘雅芳 | '
+                          'zhaogq 协办赵国庆')
+        self.stdout.write('  assistant1 只读助理（限时借阅 c2，14天）')
+        self.stdout.write('  assistant2 只读助理（c7 借阅已到期）')
+        self.stdout.write('  assistant3 只读助理（c1 已撤权）')

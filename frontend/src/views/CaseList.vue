@@ -23,7 +23,7 @@
           </el-select>
         </el-form-item>
         <el-form-item>
-          <el-button type="primary" @click="openDialog()">新建案件</el-button>
+          <el-button v-if="canCreate" type="primary" @click="openDialog()">新建案件</el-button>
         </el-form-item>
       </el-form>
     </el-card>
@@ -50,6 +50,16 @@
             </span>
           </template>
         </el-table-column>
+        <el-table-column label="我的权限" width="110">
+          <template #default="{ row }">
+            <el-tag v-if="auth.user.is_admin" size="small" type="danger" effect="dark">管理员</el-tag>
+            <el-tag v-else-if="row.my_access" size="small"
+                    :type="row.my_access.role === 'reader' ? 'info' : 'success'">
+              {{ row.my_access.role_display }}
+              <span v-if="row.my_access.source === 'grant'" class="borrow">借阅</span>
+            </el-tag>
+          </template>
+        </el-table-column>
         <el-table-column label="待办期限" width="90" align="center">
           <template #default="{ row }">
             <el-badge v-if="row.pending_deadline_count" :value="row.pending_deadline_count" type="warning" />
@@ -57,11 +67,13 @@
           </template>
         </el-table-column>
         <el-table-column prop="filed_date" label="立案日期" width="110" />
-        <el-table-column label="操作" width="150" fixed="right">
+        <el-table-column label="操作" width="230" fixed="right">
           <template #default="{ row }">
             <el-button link type="primary" @click="$router.push(`/cases/${row.id}`)">详情</el-button>
-            <el-button link type="primary" @click="openDialog(row)">编辑</el-button>
-            <el-popconfirm title="确定删除该案件及其全部关联记录？" @confirm="remove(row)">
+            <el-button v-if="canEditCase(row)" link type="primary" @click="openDialog(row)">编辑</el-button>
+            <el-button v-if="auth.user.is_admin" link type="warning"
+                       @click="$router.push(`/cases/${row.id}?tab=access`)">授权</el-button>
+            <el-popconfirm v-if="auth.user.is_admin" title="确定删除该案件及其全部关联记录？" @confirm="remove(row)">
               <template #reference>
                 <el-button link type="danger">删除</el-button>
               </template>
@@ -134,12 +146,15 @@
 </template>
 
 <script setup>
-import { onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import api from '../api'
+import { auth, canEditCase } from '../auth'
 
 const stageMap = { filing: '立案', first: '一审', second: '二审', retrial: '再审', enforcement: '执行', closed: '结案' }
 const typeMap = { civil: '民事', criminal: '刑事', administrative: '行政', arbitration: '仲裁', nonlit: '非诉讼' }
+
+const canCreate = computed(() => auth.user.is_admin || auth.user.profile.role !== 'reader')
 
 const cases = ref([])
 const loading = ref(false)
@@ -202,4 +217,5 @@ onMounted(load)
 .link { color: #409eff; text-decoration: none; }
 .lawyer-tag { margin-right: 8px; font-size: 13px; }
 .role { color: #999; font-size: 12px; }
+.borrow { margin-left: 2px; font-size: 11px; opacity: .85; }
 </style>

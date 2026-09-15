@@ -18,7 +18,7 @@
           </el-select>
         </el-form-item>
         <el-form-item>
-          <el-button type="primary" @click="openDialog()">新建当事人</el-button>
+          <el-button v-if="canCreate" type="primary" @click="openDialog()">新建当事人</el-button>
         </el-form-item>
       </el-form>
     </el-card>
@@ -39,12 +39,13 @@
         <el-table-column prop="case_count" label="涉及案件" width="90" align="center" />
         <el-table-column label="操作" width="130" fixed="right">
           <template #default="{ row }">
-            <el-button link type="primary" @click="openDialog(row)">编辑</el-button>
-            <el-popconfirm title="确定删除该当事人？案件中的关联记录也会删除" @confirm="remove(row)">
+            <el-button v-if="auth.user.is_admin" link type="primary" @click="openDialog(row)">编辑</el-button>
+            <el-popconfirm v-if="auth.user.is_admin" title="确定删除该当事人？案件中的关联记录也会删除" @confirm="remove(row)">
               <template #reference>
                 <el-button link type="danger">删除</el-button>
               </template>
             </el-popconfirm>
+            <span v-if="!auth.user.is_admin" class="sub">只读档案</span>
           </template>
         </el-table-column>
       </el-table>
@@ -83,9 +84,12 @@
 </template>
 
 <script setup>
-import { onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import api from '../api'
+import { auth } from '../auth'
+
+const canCreate = computed(() => auth.user.is_admin || auth.user.profile.role !== 'reader')
 
 const parties = ref([])
 const loading = ref(false)
@@ -136,3 +140,7 @@ async function remove(row) {
 
 onMounted(load)
 </script>
+
+<style scoped>
+.sub { color: #999; font-size: 12px; }
+</style>

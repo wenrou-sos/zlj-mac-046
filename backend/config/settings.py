@@ -75,7 +75,20 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 CORS_ALLOW_ALL_ORIGINS = True
 
+# 前后端分离开发（Vite 5173）时的 CSRF 可信来源；生产单端口托管不受影响
+CSRF_TRUSTED_ORIGINS = [
+    'http://localhost:5173',
+    'http://127.0.0.1:5173',
+]
+
 REST_FRAMEWORK = {
     'DATETIME_FORMAT': '%Y-%m-%d %H:%M',
     'DATE_FORMAT': '%Y-%m-%d',
+    'DEFAULT_AUTHENTICATION_CLASSES': [
+        'cases.authentication.SessionAuth401',
+        'cases.authentication.BasicAuth401',
+    ],
+    'DEFAULT_PERMISSION_CLASSES': [
+        'cases.permissions.IsAuthenticatedDRF',
+    ],
 }
