@@ -176,6 +176,116 @@ class Material(models.Model):
         return self.name
 
 
+class CaseHandover(models.Model):
+    """案件交接：律师离岗/更换主办时，交出人与接收人核对待办后确认接管"""
+    STATUS_CHOICES = [
+        ('draft', '草稿'),
+        ('pending', '待接收人核对'),
+        ('returned', '已退回补充'),
+        ('completed', '已完成交接'),
+        ('canceled', '已取消'),
+    ]
+    case = models.ForeignKey(Case, on_delete=models.CASCADE, related_name='handovers')
+    from_lawyer = models.ForeignKey(
+        Lawyer, on_delete=models.PROTECT, related_name='handovers_from',
+        verbose_name='交出人')
+    to_lawyer = models.ForeignKey(
+        Lawyer, on_delete=models.PROTECT, related_name='handovers_to',
+        verbose_name='接收人')
+    status = models.CharField('状态', max_length=20, choices=STATUS_CHOICES, default='draft')
+    reason = models.CharField('交接原因', max_length=200, blank=True)
+    # 待办快照指纹：实际待办变化后指纹失效，需补入清单并重新核对
+    items_hash = models.CharField('清单指纹', max_length=64, blank=True)
+    last_refreshed_at = models.DateTimeField('清单刷新时间', null=True, blank=True)
+    submitted_at = models.DateTimeField('提交核对时间', null=True, blank=True)
+    returned_reason = models.TextField('退回原因', blank=True)
+    cancel_reason = models.TextField('取消原因', blank=True)
+    completed_at = models.DateTimeField('完成时间', null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-id']
+
+    def __str__(self):
+        return f'{self.case.title} {self.from_lawyer.name}→{self.to_lawyer.name}'
+
+    @property
+    def is_active(self):
+        return self.status in ('draft', 'pending', 'returned')
+
+
+class HandoverItem(models.Model):
+    """交接清单条目：未办期限 / 后续开庭 / 待提交材料 / 自定义事项"""
+    ITEM_TYPE_CHOICES = [
+        ('deadline', '未办期限'),
+        ('hearing', '后续开庭'),
+        ('material', '待提交材料'),
+        ('custom', '其他事项'),
+    ]
+    DESTINATION_CHOICES = [
+        ('takeover', '接收人接管'),
+        ('keep', '原责任人继续办理'),
+        ('void', '无需办理'),
+    ]
+    CHANGE_CHOICES = [
+        ('new', '新增'),
+        ('changed', '已变更'),
+        ('removed', '已办结/删除'),
+        ('', ''),
+    ]
+    handover = models.ForeignKey(CaseHandover, on_delete=models.CASCADE, related_name='items')
+    item_type = models.CharField('事项类型', max_length=20, choices=ITEM_TYPE_CHOICES)
+    # 关联源对象（自定义事项为空），源对象删除后保留快照、置为 removed
+    ref_id = models.IntegerField('源对象ID', null=True, blank=True)
+    title = models.CharField('事项', max_length=200)
+    detail = models.CharField('详情', max_length=300, blank=True)
+    due_date = models.DateField('截止日期', null=True, blank=True)
+    hearing_time = models.DateTimeField('开庭时间', null=True, blank=True)
+    is_overdue = models.BooleanField('是否逾期', default=False)
+    destination = models.CharField(
+        '去向', max_length=20, choices=DESTINATION_CHOICES, default='takeover')
+    checked = models.BooleanField('接收人已核对', default=False)
+    check_note = models.CharField('核对备注', max_length=200, blank=True)
+    change_flag = models.CharField(
+        '清单变更标记', max_length=10, choices=CHANGE_CHOICES, blank=True, default='')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['id']
+        unique_together = ('handover', 'item_type', 'ref_id')
+
+    def __str__(self):
+        return f'[{self.get_item_type_display()}] {self.title}'
+
+
+class HandoverLog(models.Model):
+    """交接操作留痕（提交/退回/确认/取消/刷新等），完成后仍可追溯"""
+    ACTION_CHOICES = [
+        ('create', '发起交接'),
+        ('submit', '提交核对'),
+        ('return', '退回补充'),
+        ('confirm', '确认接管'),
+        ('cancel', '取消交接'),
+        ('refresh', '补入变更待办'),
+        ('edit', '调整清单'),
+    ]
+    handover = models.ForeignKey(CaseHandover, on_delete=models.CASCADE, related_name='logs')
+    action = models.CharField('操作', max_length=20, choices=ACTION_CHOICES)
+    actor_lawyer = models.ForeignKey(
+        Lawyer, on_delete=models.SET_NULL, null=True, verbose_name='操作人')
+    actor_name = models.CharField('操作人姓名', max_length=50)
+    note = models.TextField('说明', blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['id']
+
+    def __str__(self):
+        return f'{self.handover_id} {self.get_action_display()}'
+
+
 class Deadline(models.Model):
     """期限提醒"""
     TYPE_CHOICES = [

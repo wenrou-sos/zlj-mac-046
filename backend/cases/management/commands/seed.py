@@ -28,6 +28,11 @@ class Command(BaseCommand):
         for model in (Hearing, StageLog, Material, Deadline,
                       CaseParty, CaseLawyer, Case, Party, Lawyer):
             model.objects.all().delete()
+        # 交接记录含外键保护，律师删除前先清
+        from cases.models import CaseHandover, HandoverItem, HandoverLog
+        HandoverItem.objects.all().delete()
+        HandoverLog.objects.all().delete()
+        CaseHandover.objects.all().delete()
 
         # ---------- 律师 ----------
         lawyers = {}
@@ -222,8 +227,29 @@ class Command(BaseCommand):
             Deadline.objects.create(case=case, title=title, deadline_type=dtype,
                                     due_date=d(days), is_done=done, notes=notes)
 
+        # ---------- 案件交接样例 ----------
+        from cases import handovers as ho
+        from cases.models import CaseHandover, HandoverItem, HandoverLog
+
+        # 进行中：c6 周文斌行政案，刘雅芳 离岗交接给 陈晓东（待接收人核对）
+        h1 = CaseHandover.objects.create(
+            case=c6, from_lawyer=lawyers['刘雅芳'], to_lawyer=lawyers['陈晓东'],
+            status='pending', reason='主办律师调离，交接在手案件')
+        for snap in ho.collect_pending_items(c6):
+            HandoverItem.objects.create(handover=h1, **snap)
+        h1.items_hash = ho.compute_items_hash(ho.collect_pending_items(c6))
+        h1.last_refreshed_at = timezone.now()
+        h1.submitted_at = timezone.now()
+        h1.save()
+        HandoverLog.objects.create(
+            handover=h1, action='create', actor_lawyer=lawyers['刘雅芳'],
+            actor_name='刘雅芳', note='发起交接：刘雅芳 → 陈晓东（主办律师调离，交接在手案件）')
+        HandoverLog.objects.create(
+            handover=h1, action='submit', actor_lawyer=lawyers['刘雅芳'],
+            actor_name='刘雅芳', note='清单已提交接收人核对')
+
         self.stdout.write(self.style.SUCCESS(
             f'样例数据已生成：{Lawyer.objects.count()}名律师、'
             f'{Party.objects.count()}个当事人、{Case.objects.count()}个案件、'
             f'{Hearing.objects.count()}次开庭、{Material.objects.count()}份材料、'
-            f'{Deadline.objects.count()}项期限'))
+            f'{Deadline.objects.count()}项期限、{CaseHandover.objects.count()}个交接'))

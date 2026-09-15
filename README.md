@@ -12,6 +12,7 @@
 | 当事人管理 | 自然人/法人档案，证件号、联系方式 |
 | 律师管理 | 执业证号、职称、联系方式 |
 | 利益冲突检查 | ① 全局检索：按姓名/名称/证件号检查当事人在本所的全部涉诉记录，输出高/中/低风险结论；② 添加当事人到案件时自动预检，发现直接冲突（如系本所在办案件客户）将阻止保存 |
+| 案件交接 | 律师离岗/更换主办时发起交接，自动汇总未办期限、后续开庭、待提交材料形成清单，明确交出人、接收人及每项待办去向；接收人逐项核对后确认接管，支持退回补充与取消。交接期间新增/变更的待办须补入清单并重新核对（过期清单不能完成交接）；完成前原责任人保留可追溯，完成后工作台按新负责人归集，历史办案记录保留原承办人 |
 
 ## 快速启动
 
@@ -36,10 +37,13 @@
 │   └── cases/          核心应用
 │       ├── models.py       Lawyer / Party / Case / CaseParty / CaseLawyer
 │       │                   Hearing / StageLog / Material / Deadline
-│       ├── views.py        REST ViewSet + 工作台统计 + 冲突检查
+│       │                   CaseHandover / HandoverItem / HandoverLog
+│       ├── handovers.py    交接清单快照、防过期比对、提交/退回/确认/取消状态机
+│       ├── views.py        REST ViewSet + 工作台统计 + 冲突检查 + 案件交接
 │       └── management/commands/seed.py   样例数据
 ├── frontend/           Vue 3 + Vite + Element Plus + vue-router + axios
 │   └── src/views/      工作台 / 案件列表 / 案件详情 / 当事人 / 律师 / 冲突检查
+│                       案件交接列表 / 交接处理
 ├── pgsql/              PostgreSQL 17(用户态运行,无需 root)
 ├── pgdata/             数据库数据目录
 └── venv/               Python 虚拟环境
@@ -52,10 +56,15 @@
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| GET | `/api/dashboard/` | 工作台统计 |
+| GET | `/api/dashboard/` | 工作台统计（可带 `?lawyer={id}` 按律师个人视角归集，含待我核对的交接） |
 | GET/POST | `/api/cases/` | 案件列表/新建（支持 stage、case_type、search 过滤） |
-| GET | `/api/cases/{id}/` | 案件详情（含当事人/律师/阶段/开庭/材料/期限） |
+| GET | `/api/cases/{id}/` | 案件详情（含当事人/律师/阶段/开庭/材料/期限、进行中交接与交接历史） |
 | POST | `/api/cases/{id}/conflict-check/` | 添加当事人前的冲突预检 |
+| POST | `/api/cases/{id}/handovers/initiate/` | 发起交接（自动汇总待办生成清单，`submit=true` 直接提交核对） |
+| GET | `/api/handovers/` | 交接列表（支持 `?case=&lawyer=&status=&active=1`） |
+| POST | `/api/handovers/{id}/submit/ return/ confirm/ cancel/ refresh/` | 提交核对 / 退回补充 / 确认接管 / 取消 / 补入最新待办 |
+| POST | `/api/handovers/{id}/items/{itemId}/check/` | 接收人逐项核对（含备注） |
+| POST | `/api/handovers/{id}/items/{itemId}/destination/` | 明确去向：接管 / 原责任人继续 / 无需办理 |
 | GET | `/api/conflict-check/?name=&id_number=` | 全局利益冲突检索 |
 | GET/POST | `/api/parties/` `/api/lawyers/` | 当事人 / 律师 |
 | GET/POST | `/api/case-parties/` `/api/case-lawyers/` | 案件-当事人 / 案件-律师关联 |

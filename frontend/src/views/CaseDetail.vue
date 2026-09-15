@@ -2,6 +2,24 @@
   <div v-loading="loading">
     <template v-if="caseData.id">
       <!-- 头部 -->
+      <!-- 进行中交接横幅 -->
+      <el-alert
+        v-if="caseData.active_handover"
+        :type="caseData.active_handover.status === 'returned' ? 'error' : 'warning'"
+        show-icon
+        :closable="false"
+        style="margin-bottom: 16px"
+      >
+        <template #title>
+          本案有进行中的交接：
+          <b>{{ caseData.active_handover.from_lawyer_name }}</b>
+          → <b>{{ caseData.active_handover.to_lawyer_name }}</b>
+          （{{ caseData.active_handover.status_display }}）
+          <el-button link type="primary" size="small"
+            @click="$router.push(`/handovers/${caseData.active_handover.id}`)">前往处理 →</el-button>
+        </template>
+      </el-alert>
+
       <el-card shadow="never" style="margin-bottom: 16px">
         <div class="head">
           <div>
@@ -12,7 +30,16 @@
             </div>
             <div class="sub">{{ caseData.case_number }}</div>
           </div>
-          <el-button @click="$router.push('/cases')">返回列表</el-button>
+          <div>
+            <el-button
+              type="warning"
+              plain
+              style="margin-right: 8px"
+              :disabled="!!caseData.active_handover || !leadLawyer"
+              @click="openHandoverDialog"
+            >发起案件交接</el-button>
+            <el-button @click="$router.push('/cases')">返回列表</el-button>
+          </div>
         </div>
         <el-descriptions :column="4" border size="small" style="margin-top: 12px">
           <el-descriptions-item label="案由">{{ caseData.cause || '-' }}</el-descriptions-item>
@@ -206,6 +233,28 @@
                 </template>
               </el-table-column>
             </el-table>
+          </el-tab-pane>
+          <!-- 交接记录 -->
+          <el-tab-pane :label="`交接记录 (${caseData.handover_history.length})`" name="handovers">
+            <el-timeline v-if="caseData.handover_history.length" style="padding-left: 4px; margin-top: 8px">
+              <el-timeline-item
+                v-for="hv in caseData.handover_history"
+                :key="hv.id"
+                :timestamp="fmtTime(hv.completed_at || hv.created_at)"
+                placement="top"
+                :type="hv.status === 'completed' ? 'success' : 'info'"
+              >
+                <el-tag :type="hv.status === 'completed' ? 'success' : 'info'" size="small">
+                  {{ hv.status_display }}
+                </el-tag>
+                <b style="margin-left: 8px">{{ hv.from_lawyer_name }} → {{ hv.to_lawyer_name }}</b>
+                <div class="sub" v-if="hv.reason">原因：{{ hv.reason }}</div>
+                <el-button link type="primary" size="small" @click="$router.push(`/handovers/${hv.id}`)">
+                  查看交接清单与留痕
+                </el-button>
+              </el-timeline-item>
+            </el-timeline>
+            <el-empty v-else description="暂无交接记录" :image-size="60" />
           </el-tab-pane>
         </el-tabs>
       </el-card>
@@ -408,16 +457,59 @@
         <el-button type="primary" @click="addDeadline">保存</el-button>
       </template>
     </el-dialog>
+    <!-- 发起交接对话框 -->
+    <el-dialog v-model="handoverDialog" title="发起案件交接" width="520px">
+      <el-alert
+        type="info"
+        :closable="false"
+        title="发起后将自动汇总本案未办期限、后续开庭、待提交材料形成交接清单，由接收人逐项核对后确认接管。"
+        style="margin-bottom: 12px"
+      />
+      <el-form label-width="90px">
+        <el-form-item label="交出人">
+          <el-select v-model="handoverForm.from_lawyer" style="width: 100%">
+            <el-option
+              v-for="cl in caseData.case_lawyers"
+              :key="cl.id"
+              :label="`${cl.lawyer.name}（${cl.role_display}）`"
+              :value="cl.lawyer.id"
+            />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="接收人" required>
+          <el-select v-model="handoverForm.to_lawyer" filterable style="width: 100%"
+            placeholder="选择接手承办的律师">
+            <el-option
+              v-for="l in availableReceivers"
+              :key="l.id"
+              :label="`${l.name}（${l.title_display}）`"
+              :value="l.id"
+            />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="交接原因">
+          <el-input v-model="handoverForm.reason" placeholder="如 离岗/调岗/更换主办" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="handoverDialog = false">取消</el-button>
+        <el-button @click="createHandover(false)">仅生成清单</el-button>
+        <el-button type="primary" :loading="handoverSaving" @click="createHandover(true)">
+          发起并提交核对
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import api from '../api'
 
 const route = useRoute()
+const router = useRouter()
 const caseId = route.params.id
 
 const stageMap = { filing: '立案', first: '一审', second: '二审', retrial: '再审', enforcement: '执行', closed: '结案' }
@@ -457,6 +549,43 @@ const materialForm = reactive({ name: '', submitted_to: '', submit_date: null, s
 const deadlineForm = reactive({ title: '', deadline_type: 'other', due_date: '', remind_days: 7, notes: '' })
 
 const pendingDeadlines = computed(() => caseData.value.deadlines.filter((d) => !d.is_done))
+const leadLawyer = computed(() => caseData.value.case_lawyers.find((cl) => cl.role === 'lead'))
+const availableReceivers = computed(() =>
+  allLawyers.value.filter((l) => !caseData.value.case_lawyers.some((cl) => cl.lawyer.id === l.id)))
+
+const handoverDialog = ref(false)
+const handoverSaving = ref(false)
+const handoverForm = reactive({ from_lawyer: null, to_lawyer: null, reason: '' })
+
+function openHandoverDialog() {
+  handoverForm.from_lawyer = leadLawyer.value ? leadLawyer.value.lawyer.id : null
+  handoverForm.to_lawyer = null
+  handoverForm.reason = ''
+  handoverDialog.value = true
+}
+
+async function createHandover(submit) {
+  if (!handoverForm.to_lawyer) {
+    ElMessage.warning('请选择接收人')
+    return
+  }
+  handoverSaving.value = true
+  try {
+    const res = await api.post(`/cases/${caseId}/handovers/initiate/`, {
+      from_lawyer: handoverForm.from_lawyer,
+      to_lawyer: handoverForm.to_lawyer,
+      reason: handoverForm.reason,
+      submit,
+    })
+    ElMessage.success(submit ? '已提交接收人核对' : '交接清单已生成')
+    handoverDialog.value = false
+    router.push(`/handovers/${res.data.id}`)
+  } finally {
+    handoverSaving.value = false
+  }
+}
+
+const fmtTime = (t) => (t ? t.replace('T', ' ').slice(0, 10) : '-')
 
 const daysType = (n) => (n < 0 ? 'danger' : n <= 7 ? 'warning' : 'success')
 const daysText = (n) => (n < 0 ? `逾期${-n}天` : n === 0 ? '今天' : `${n}天`)

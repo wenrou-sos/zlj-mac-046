@@ -7,6 +7,8 @@ const routes = [
   { path: '/parties', name: 'parties', component: () => import('./views/PartyList.vue'), meta: { title: '当事人管理' } },
   { path: '/lawyers', name: 'lawyers', component: () => import('./views/LawyerList.vue'), meta: { title: '律师管理' } },
   { path: '/conflict', name: 'conflict', component: () => import('./views/ConflictCheck.vue'), meta: { title: '利益冲突检查' } },
+  { path: '/handovers', name: 'handovers', component: () => import('./views/HandoverList.vue'), meta: { title: '案件交接' } },
+  { path: '/handovers/:id', name: 'handover-detail', component: () => import('./views/HandoverDetail.vue'), meta: { title: '交接处理' } },
 ]
 
 export default createRouter({

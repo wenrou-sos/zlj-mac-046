@@ -13,6 +13,7 @@
         <el-menu-item index="/cases">案件管理</el-menu-item>
         <el-menu-item index="/parties">当事人管理</el-menu-item>
         <el-menu-item index="/lawyers">律师管理</el-menu-item>
+        <el-menu-item index="/handovers">案件交接</el-menu-item>
         <el-menu-item index="/conflict">利益冲突检查</el-menu-item>
       </el-menu>
     </el-aside>
@@ -35,6 +36,7 @@ import { useRoute } from 'vue-router'
 const route = useRoute()
 const activeMenu = computed(() => {
   if (route.path.startsWith('/cases')) return '/cases'
+  if (route.path.startsWith('/handovers')) return '/handovers'
   return route.path
 })
 const today = new Date().toLocaleDateString('zh-CN', {
