@@ -250,13 +250,25 @@ class HandoverViewSet(viewsets.ReadOnlyModelViewSet):
         ho._require_lawyer(handover, actor, [handover.from_lawyer, handover.to_lawyer])
         if handover.status not in ('draft', 'pending', 'returned'):
             raise ValidationError({'status': '已结束的交接不能再刷新清单'})
-        result = refresh_items(handover, actor=actor, note=request.data.get('note', ''))
+        result = refresh_items(
+            handover, actor=actor, note=request.data.get('note', ''),
+            resubmit=bool(request.data.get('resubmit')))
         # 补入变更后若处于待核对，退回交出人重新提交，接收人须基于新清单重新核对
         changed_any = any([result['added'], result['changed'], result['removed']])
         if changed_any and handover.status == 'pending':
             handover.status = 'returned'
             handover.returned_reason = '交接期间有待办新增/变更，已自动补入清单，请交出人确认后重新提交'
             handover.save()
+        # 交出人在退回状态补入且勾选 resubmit：直接重新提交核对
+        if (request.data.get('resubmit') and actor == handover.from_lawyer
+                and handover.status == 'returned'
+                and handover.items.exclude(change_flag='removed').exists()):
+            handover.status = 'pending'
+            handover.submitted_at = timezone.now()
+            handover.returned_reason = ''
+            handover.save()
+            from .handovers import _log
+            _log(handover, 'submit', actor, '补入最新待办后重新提交核对')
         # prefetch 缓存是刷新前的对象，需重新取库
         return Response({
             'detail': ('清单已是最新' if not changed_any
@@ -445,7 +457,9 @@ def dashboard(request):
     if lawyer:
         active_qs = CaseHandover.objects.filter(
             status__in=['draft', 'pending', 'returned']).select_related('case')
-        to_review = active_qs.filter(to_lawyer=lawyer)
+        # 只有「待接收人核对」才出现在接收人工作台；已退回补充的控制权在交出人
+        to_review = active_qs.filter(to_lawyer=lawyer, status='pending')
+        # 交出人视角：草稿、被退回需处理，以及已提交待对方核对（可查看进度）
         outgoing = active_qs.filter(from_lawyer=lawyer)
         data['handovers_to_review'] = HandoverListSerializer(to_review, many=True).data
         data['handovers_outgoing'] = HandoverListSerializer(outgoing, many=True).data

@@ -37,17 +37,21 @@
     <!-- 我发起、进行中的交接 -->
     <el-card v-if="data.handovers_outgoing?.length" shadow="never" style="margin-bottom: 16px">
       <template #header><b>我发起、进行中的交接（{{ data.handovers_outgoing.length }}）</b>
-        <span class="card-sub">完成前你仍是原责任人，待办仍需跟进</span>
+        <span class="card-sub">完成前你仍是原责任人；被退回的需补充后重新提交</span>
       </template>
       <div v-for="hv in data.handovers_outgoing" :key="hv.id" class="ho-row">
         <div>
           <router-link :to="`/handovers/${hv.id}`" class="link">{{ hv.case_title }}</router-link>
           <span class="sub-text">{{ hv.case_number }} · 交给 {{ hv.to_lawyer_name }}</span>
-          <el-tag :type="hv.status === 'returned' ? 'danger' : 'info'" size="small" style="margin-left: 8px">
-            {{ hv.status_display }}
+          <el-tag :type="hv.status === 'returned' ? 'danger' : hv.status === 'draft' ? 'info' : 'warning'"
+                  size="small" style="margin-left: 8px">
+            {{ hv.status === 'returned' ? '已退回·需补充' : hv.status === 'draft' ? '草稿·未提交' : '待对方核对' }}
           </el-tag>
+          <el-tag v-if="hv.stale" type="danger" size="small" effect="dark" style="margin-left: 4px">清单有变化</el-tag>
         </div>
-        <el-button size="small" @click="$router.push(`/handovers/${hv.id}`)">查看</el-button>
+        <el-button size="small" @click="$router.push(`/handovers/${hv.id}`)">
+          {{ hv.status === 'returned' ? '去处理' : '查看' }}
+        </el-button>
       </div>
     </el-card>
 

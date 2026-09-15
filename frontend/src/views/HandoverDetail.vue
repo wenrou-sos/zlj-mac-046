@@ -398,8 +398,16 @@ async function setDestination(row, destination) {
 }
 
 async function doConfirm() {
+  // 确认前强制重新拉取，防止页面停留期间案件新增待办、用户用旧数据确认
+  const latest = await api.get(`/handovers/${h.value.id}/`)
+  h.value = latest.data
   if (stale.value) {
-    ElMessage.error('清单已过期，请先「补入最新待办」并重新核对')
+    ElMessage.error('交接期间案件待办有变化，不能使用过期清单完成交接。请先「补入最新待办」并重新核对')
+    return
+  }
+  const unchecked = activeItems.value.filter((i) => !i.checked)
+  if (unchecked.length) {
+    ElMessage.error(`还有 ${unchecked.length} 项未核对：${unchecked.slice(0, 3).map((i) => i.title).join('、')}`)
     return
   }
   try {

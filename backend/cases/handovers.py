@@ -97,10 +97,11 @@ def _match_snapshot(items, item_type, ref_id):
 
 
 @transaction.atomic
-def refresh_items(handover, actor=None, note=''):
+def refresh_items(handover, actor=None, note='', resubmit=False):
     """将案件新增/变更的待办补入清单；已办结或删除的条目标记 removed。
 
     已核对状态仅对发生变化（含新增/删除）的条目重置，未变化条目保留核对结果。
+    resubmit=True 时，交出人在「已退回补充」状态补入后直接重新提交核对。
     返回 {'added': n, 'changed': n, 'removed': n, 'changed_titles': [...]}
     """
     live = collect_pending_items(handover.case)
@@ -241,6 +242,8 @@ def confirm_takeover(handover, actor):
     _require_lawyer(handover, actor, [handover.to_lawyer])
     _require_status(handover, [PENDING])
 
+    # —— 防过期（三层，全部在同一事务内重新取库）——
+    # 1) 重新取案件实时待办，与清单逐项比对（新增/变更/办结删除）
     diff = diff_items(handover)
     if diff['stale']:
         raise ValidationError({
@@ -248,7 +251,21 @@ def confirm_takeover(handover, actor):
             **{k: v for k, v in diff.items() if k != 'stale'},
         })
 
-    active = handover.items.exclude(change_flag='removed')
+    # 2) 硬性数量不变量：案件实时待办数必须等于清单内有效条目数
+    live_items = collect_pending_items(handover.case)
+    active = HandoverItem.objects.select_for_update().filter(
+        handover=handover).exclude(change_flag='removed')
+    live_keys = {(i['item_type'], i['ref_id']) for i in live_items
+                 if i['item_type'] != 'custom'}
+    list_keys = {(i.item_type, i.ref_id) for i in active if i.item_type != 'custom'}
+    if live_keys != list_keys:
+        raise ValidationError({
+            'stale': '案件待办与交接清单不一致（清单可能已过期），请先「补入最新待办」并重新核对',
+            'added': [t for t in diff['added']],
+            'removed': [t for t in diff['removed']],
+        })
+
+    # 3) 全部条目逐项核对
     unchecked = active.filter(checked=False)
     if unchecked.exists():
         names = '、'.join(unchecked.values_list('title', flat=True)[:5])
