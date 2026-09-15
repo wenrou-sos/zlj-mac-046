@@ -7,13 +7,15 @@ from rest_framework.decorators import action, api_view
 from rest_framework.response import Response
 
 from .models import (Case, CaseLawyer, CaseParty, Deadline, Hearing, Lawyer,
-                     Material, Party, StageLog)
+                     Material, Party, PartyAlias, PartyMergeRecord, StageLog)
 from .serializers import (CaseDetailSerializer, CaseLawyerSerializer,
                           CaseListSerializer, CasePartySerializer,
                           CaseWriteSerializer, DeadlineSerializer,
                           HearingSerializer, LawyerSerializer,
-                          MaterialSerializer, PartySerializer,
+                          MaterialSerializer, PartyAliasSerializer,
+                          PartyMergeRecordSerializer, PartySerializer,
                           StageLogSerializer)
+from .services import duplicate_candidates, merge_parties
 
 
 class LawyerViewSet(viewsets.ModelViewSet):
@@ -31,14 +33,58 @@ class PartyViewSet(viewsets.ModelViewSet):
     serializer_class = PartySerializer
 
     def get_queryset(self):
-        qs = Party.objects.all()
+        qs = Party.objects.all().prefetch_related('aliases', 'merged_parties')
+        # 旧档案入口仍可通过详情访问；普通列表/选择框默认只取有效主档。
+        if self.action == 'list' and self.request.query_params.get('include_merged') != 'true':
+            qs = qs.filter(merged_into__isnull=True)
         search = self.request.query_params.get('search', '').strip()
         ptype = self.request.query_params.get('party_type', '').strip()
         if search:
-            qs = qs.filter(Q(name__icontains=search) | Q(id_number__icontains=search))
+            alias_ids = PartyAlias.objects.filter(name__icontains=search).values_list('party_id', flat=True)
+            qs = qs.filter(
+                Q(name__icontains=search)
+                | Q(id_number__icontains=search)
+                | Q(phone__icontains=search)
+                | Q(id__in=alias_ids)
+            ).distinct()
         if ptype:
             qs = qs.filter(party_type=ptype)
         return qs
+
+    def destroy(self, request, *args, **kwargs):
+        party = self.get_object()
+        if party.merged_parties.exists():
+            return Response(
+                {'detail': '该主档下存在已合并旧档，不能删除；可先查看合并记录核实归属。'},
+                status=status.HTTP_400_BAD_REQUEST)
+        return super().destroy(request, *args, **kwargs)
+
+    @action(detail=False, methods=['get'], url_path='duplicates')
+    def duplicates(self, request):
+        """按证件号、名称、联系方式生成待核实重复档案分组。"""
+        results = duplicate_candidates()
+        return Response({'count': len(results), 'results': results})
+
+    @action(detail=True, methods=['get'], url_path='merge-history')
+    def merge_history(self, request, pk=None):
+        party = self.get_object()
+        master = party.merged_into or party
+        records = PartyMergeRecord.objects.filter(
+            Q(master_party=master) | Q(source_party=party)
+        ).select_related('master_party', 'source_party').order_by('-created_at', '-id')
+        aliases = master.aliases.all()
+        return Response({
+            'party': PartySerializer(party).data,
+            'master': PartySerializer(master).data,
+            'aliases': PartyAliasSerializer(aliases, many=True).data,
+            'records': PartyMergeRecordSerializer(records, many=True).data,
+        })
+
+    @action(detail=False, methods=['post'], url_path='merge')
+    def merge(self, request):
+        """经办人选择主档、逐项确认冲突后原子合并。"""
+        result = merge_parties(request.data)
+        return Response(result, status=status.HTTP_200_OK)
 
 
 class CaseViewSet(viewsets.ModelViewSet):
@@ -69,7 +115,8 @@ class CaseViewSet(viewsets.ModelViewSet):
         POST /api/cases/{id}/conflict-check/  {party_id, is_client}
         """
         case = self.get_object()
-        party = get_object_or_404(Party, pk=request.data.get('party_id'))
+        raw_party = get_object_or_404(Party, pk=request.data.get('party_id'))
+        party = raw_party.merged_into or raw_party
         is_client = bool(request.data.get('is_client'))
 
         conflicts = []
@@ -198,7 +245,7 @@ def dashboard(request):
     return Response({
         'case_total': cases.count(),
         'case_active': cases.exclude(stage='closed').count(),
-        'party_total': Party.objects.count(),
+        'party_total': Party.objects.filter(merged_into__isnull=True).count(),
         'lawyer_total': Lawyer.objects.count(),
         'deadline_overdue': Deadline.objects.filter(is_done=False, due_date__lt=today).count(),
         'stage_stats': stage_stats,
@@ -238,7 +285,9 @@ def conflict_check(request):
         q |= Q(name__icontains=name)
     if id_number:
         q |= Q(id_number=id_number)
-    parties = Party.objects.filter(q).distinct()
+    parties = (Party.objects.filter(q)
+               .filter(merged_into__isnull=True).distinct()
+               .prefetch_related('aliases'))
 
     results = []
     for party in parties:

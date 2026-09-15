@@ -9,7 +9,7 @@
 | 工作台 | 案件统计、未来 30 天期限提醒（含逾期标红）、近期开庭时间线、案件阶段分布 |
 | 案件管理 | 案件登记（案号/类型/案由/法院/标的额）、筛选搜索、编辑删除 |
 | 案件详情 | 当事人（诉讼地位/是否本所客户）、承办律师（主办/协办）、诉讼阶段流转时间线、开庭安排、材料提交记录、期限管理 |
-| 当事人管理 | 自然人/法人档案，证件号、联系方式 |
+| 当事人管理 | 自然人/法人档案，证件号、联系方式、原档来源；重复档案核实、主档合并、旧名与合并记录追溯 |
 | 律师管理 | 执业证号、职称、联系方式 |
 | 利益冲突检查 | ① 全局检索：按姓名/名称/证件号检查当事人在本所的全部涉诉记录，输出高/中/低风险结论；② 添加当事人到案件时自动预检，发现直接冲突（如系本所在办案件客户）将阻止保存 |
 
@@ -34,7 +34,8 @@
 ├── backend/            Django 5 + DRF
 │   ├── config/         设置(PostgreSQL 连接、CORS、静态托管)
 │   └── cases/          核心应用
-│       ├── models.py       Lawyer / Party / Case / CaseParty / CaseLawyer
+│       ├── models.py       Lawyer / Party / PartyAlias / PartyMergeRecord
+│       │                   Case / CaseParty / CaseLawyer
 │       │                   Hearing / StageLog / Material / Deadline
 │       ├── views.py        REST ViewSet + 工作台统计 + 冲突检查
 │       └── management/commands/seed.py   样例数据
@@ -57,7 +58,10 @@
 | GET | `/api/cases/{id}/` | 案件详情（含当事人/律师/阶段/开庭/材料/期限） |
 | POST | `/api/cases/{id}/conflict-check/` | 添加当事人前的冲突预检 |
 | GET | `/api/conflict-check/?name=&id_number=` | 全局利益冲突检索 |
-| GET/POST | `/api/parties/` `/api/lawyers/` | 当事人 / 律师 |
+| GET | `/api/parties/` `/api/lawyers/` | 当事人 / 律师（当事人默认仅列有效主档，`include_merged=true` 可含旧档） |
+| GET | `/api/parties/duplicates/` | 按证件号、名称+联系方式、同名规则生成待核实重复档案分组 |
+| POST | `/api/parties/merge/` | 选择主档并逐项确认字段与涉案关系后原子合并 |
+| GET | `/api/parties/{id}/merge-history/` | 旧档定位主档、查看保留旧名、原档来源与合并记录 |
 | GET/POST | `/api/case-parties/` `/api/case-lawyers/` | 案件-当事人 / 案件-律师关联 |
 | GET/POST | `/api/hearings/` `/api/stage-logs/` `/api/materials/` `/api/deadlines/` | 开庭 / 阶段 / 材料 / 期限（支持 `?case={id}` 过滤） |
 | GET | `/api/deadlines/?upcoming=1&days=30` | 未来 N 天待办期限 |

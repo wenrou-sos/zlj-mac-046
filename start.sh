@@ -5,6 +5,11 @@ set -e
 cd "$(dirname "$0")"
 ROOT=$(pwd)
 
+# 确保用户态 PostgreSQL 运行目录完整且权限安全
+chmod 700 "$ROOT/pgdata"
+mkdir -p "$ROOT/pgdata"/{pg_notify,pg_stat,pg_stat_tmp,pg_serial,pg_snapshots,pg_tblspc,pg_replslot,pg_twophase,pg_dynshmem,pg_commit_timestamp,pg_wal/archive_status,pg_wal/summaries,pg_logical/snapshots,pg_logical/mappings}
+chmod 700 "$ROOT/pgdata"/{pg_notify,pg_stat,pg_stat_tmp,pg_serial,pg_snapshots,pg_tblspc,pg_replslot,pg_twophase,pg_dynshmem,pg_commit_timestamp,pg_wal/archive_status,pg_wal/summaries,pg_logical/snapshots,pg_logical/mappings}
+
 # 1. 启动 PostgreSQL(用户态,端口 5432)
 if ! ./pgsql/bin/pg_ctl -D pgdata status > /dev/null 2>&1; then
   echo ">> 启动 PostgreSQL..."

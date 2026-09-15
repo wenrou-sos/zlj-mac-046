@@ -3,7 +3,7 @@ from datetime import date
 from rest_framework import serializers
 
 from .models import (Case, CaseLawyer, CaseParty, Deadline, Hearing, Lawyer,
-                     Material, Party, StageLog)
+                     Material, Party, PartyAlias, PartyMergeRecord, StageLog)
 
 
 class LawyerSerializer(serializers.ModelSerializer):
@@ -18,16 +18,50 @@ class LawyerSerializer(serializers.ModelSerializer):
         return obj.cases.exclude(stage='closed').count()
 
 
+class PartyAliasSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PartyAlias
+        fields = ['id', 'name', 'source_system', 'source_party', 'created_at']
+
+
+class PartyMergeRecordSerializer(serializers.ModelSerializer):
+    master_name = serializers.CharField(source='master_party.name', read_only=True)
+
+    class Meta:
+        model = PartyMergeRecord
+        fields = ['id', 'master_party', 'master_name', 'source_party', 'source_name',
+                  'source_system', 'source_snapshot', 'field_resolutions',
+                  'relation_resolutions', 'warnings_confirmed', 'operator', 'created_at']
+
+
 class PartySerializer(serializers.ModelSerializer):
     party_type_display = serializers.CharField(source='get_party_type_display', read_only=True)
     case_count = serializers.SerializerMethodField()
+    is_merged = serializers.BooleanField(read_only=True)
+    merged_into = serializers.PrimaryKeyRelatedField(read_only=True)
+    merged_into_id = serializers.IntegerField(read_only=True)
+    merged_into_name = serializers.CharField(source='merged_into.name', read_only=True)
+    merged_at = serializers.DateTimeField(read_only=True)
+    aliases = PartyAliasSerializer(many=True, read_only=True)
+    alias_names = serializers.SerializerMethodField()
 
     class Meta:
         model = Party
-        fields = '__all__'
+        fields = ['id', 'name', 'party_type', 'party_type_display', 'id_number',
+                  'phone', 'address', 'source_system', 'notes', 'case_count',
+                  'is_merged', 'merged_into', 'merged_into_id', 'merged_into_name',
+                  'merged_at', 'aliases', 'alias_names', 'created_at']
 
     def get_case_count(self, obj):
         return obj.cases.count()
+
+    def get_alias_names(self, obj):
+        return list(obj.aliases.values_list('name', flat=True))
+
+    def validate(self, attrs):
+        if self.instance and self.instance.merged_into_id:
+            raise serializers.ValidationError('旧档已合并，不能直接编辑；请修改合并后的主档')
+        return attrs
 
 
 class CasePartySerializer(serializers.ModelSerializer):
@@ -44,8 +78,12 @@ class CasePartySerializer(serializers.ModelSerializer):
 
 
     def validate(self, attrs):
+        party = attrs['party']
+        while party.merged_into_id:
+            party = party.merged_into
+        attrs['party'] = party
         qs = CaseParty.objects.filter(
-            case=attrs['case'], party=attrs['party'], role=attrs['role'])
+            case=attrs['case'], party=party, role=attrs['role'])
         if self.instance:
             qs = qs.exclude(pk=self.instance.pk)
         if qs.exists():
