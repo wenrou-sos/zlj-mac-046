@@ -4,8 +4,10 @@ from datetime import date, datetime, timedelta
 from django.core.management.base import BaseCommand
 from django.utils import timezone
 
-from cases.models import (Case, CaseLawyer, CaseParty, Deadline, Hearing,
-                          Lawyer, Material, Party, StageLog)
+from cases.models import (Case, CaseLawyer, CaseParty, Deadline, DeadlineEvent,
+                          DeadlineRule, Hearing, Holiday, Lawyer, Material,
+                          Party, StageLog)
+from cases.services import create_version, process_event, sync_reminders
 
 TODAY = date.today()
 
@@ -25,8 +27,9 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         # 清空旧数据（顺序：关联表 -> 主表）
-        for model in (Hearing, StageLog, Material, Deadline,
-                      CaseParty, CaseLawyer, Case, Party, Lawyer):
+        for model in (Deadline, DeadlineEvent, Hearing, StageLog, Material,
+                      CaseParty, CaseLawyer, Case, DeadlineRule, Holiday,
+                      Party, Lawyer):
             model.objects.all().delete()
 
         # ---------- 律师 ----------
@@ -41,6 +44,37 @@ class Command(BaseCommand):
         ]:
             lawyers[name] = Lawyer.objects.create(
                 name=name, bar_number=bar, title=title, phone=phone, email=email)
+
+        # ---------- 节假日 ----------
+        for offset, name in [
+            (16, '国庆节'), (17, '国庆节'), (18, '国庆节'), (20, '国庆节'),
+            (21, '国庆节'), (22, '国庆节'), (23, '国庆节'),
+        ]:
+            Holiday.objects.create(holiday_date=d(offset), name=name)
+
+        # ---------- 期限规则 ----------
+        rules = {}
+
+        def make_rule(key, name, dtype, event_type, days, day_type='natural',
+                      start='next_day', postpone=True, remind=7, escalate=3,
+                      owner_role='lead', reviewer_role='assist'):
+            rules[key] = DeadlineRule.objects.create(
+                name=name, deadline_type=dtype, event_type=event_type,
+                duration_days=days, day_type=day_type, start_timing=start,
+                holiday_postpone=postpone, remind_days=remind,
+                escalate_days=escalate, owner_role=owner_role,
+                reviewer_role=reviewer_role)
+
+        make_rule('evidence_service', '举证期限届满', 'evidence', 'service',
+                  10, 'workday', 'next_day', True, 3)
+        make_rule('defense_service', '答辩期限届满', 'defense', 'service',
+                  15, 'natural', 'next_day', True, 5)
+        make_rule('appeal_judgment', '上诉期限届满', 'appeal', 'judgment',
+                  15, 'natural', 'next_day', True, 3)
+        make_rule('payment_filing', '缴纳案件受理费', 'payment', 'filing',
+                  7, 'natural', 'event_day', True, 2)
+        make_rule('enforcement_judgment', '申请执行期限届满', 'enforcement', 'judgment',
+                  365, 'natural', 'next_day', True, 30)
 
         # ---------- 当事人 ----------
         parties = {}
@@ -203,27 +237,52 @@ class Command(BaseCommand):
                 submit_date=d(days) if days is not None else None,
                 status=status_, notes=notes)
 
-        # ---------- 期限提醒 ----------
-        for case, title, dtype, days, done, notes in [
-            (c1, '举证期限届满', 'evidence', 6, False, '逾期举证可能被法院不予采纳'),
-            (c1, '开庭', 'hearing', 10, False, '第12法庭'),
-            (c1, '缴纳案件受理费', 'payment', -85, True, '已缴纳'),
-            (c2, '二审新证据提交期限', 'evidence', 9, False, '鉴定报告出具后立即提交'),
-            (c2, '缴纳上诉费', 'payment', -50, True, '对方已缴纳'),
-            (c3, '上诉期限届满(一审判决)', 'appeal', 3, False, '收到判决次日起10日内'),
-            (c4, '管辖权异议裁定的上诉期限', 'appeal', -2, False, '已逾期，需与当事人确认是否放弃'),
-            (c4, '举证期限届满', 'evidence', 16, False, ''),
-            (c5, '补充财产线索', 'other', 12, False, '执行法官要求限期补充'),
-            (c6, '举证期限届满', 'evidence', 7, False, '行政案件举证期限15日'),
-            (c7, '仲裁答辩期届满', 'defense', 10, False, '被申请人答辩期'),
-            (c7, '缴纳仲裁费余额', 'payment', 20, False, ''),
-            (c8, '上诉期限', 'appeal', -250, True, '双方均未上诉，调解书生效'),
-        ]:
-            Deadline.objects.create(case=case, title=title, deadline_type=dtype,
-                                    due_date=d(days), is_done=done, notes=notes)
+        # ---------- 起算事件（保存时按律所规则幂等生成期限） ----------
+        def make_event(case, etype, title, days, notes=''):
+            event = DeadlineEvent.objects.create(
+                case=case, event_type=etype, title=title,
+                event_date=d(days), notes=notes)
+            process_event(event)
+            return event
+
+        make_event(c1, 'service', '送达起诉状副本及举证通知书', -8, '规则生成10个工作日举证期')
+        make_event(c3, 'judgment', '一审判决书送达', -12, '规则生成15日上诉期')
+        make_event(c4, 'service', '送达起诉状副本及应诉通知书', -10, '规则生成15日答辩期')
+        make_event(c6, 'filing', '行政案件立案受理', -5, '规则生成7日缴费期')
+        make_event(c7, 'service', '送达仲裁申请书及答辩通知', -4, '规则生成15日答辩期')
+
+        # ---------- 人工期限 ----------
+        def manual_deadline(case, owner, reviewer, title, dtype, days,
+                            done=False, notes='', remind=7):
+            deadline = Deadline.objects.create(
+                case=case, title=title, deadline_type=dtype, due_date=d(days),
+                remind_days=remind, owner=lawyers[owner], reviewer=lawyers[reviewer],
+                is_done=done, notes=notes, source='manual',
+                basis_text=f'人工登记：{title}，截止日期由承办人指定。')
+            create_version(deadline, 'created', '样例人工登记期限')
+            sync_reminders(deadline)
+            return deadline
+
+        manual_deadline(c1, '张伟民', '陈晓东', '开庭', 'hearing', 10,
+                        False, '第12法庭', 3)
+        manual_deadline(c1, '张伟民', '陈晓东', '缴纳案件受理费', 'payment', -85,
+                        True, '已缴纳')
+        manual_deadline(c2, '李静怡', '张伟民', '二审新证据提交期限', 'evidence', 9,
+                        False, '鉴定报告出具后立即提交')
+        manual_deadline(c2, '张伟民', '李静怡', '缴纳上诉费', 'payment', -50,
+                        True, '对方已缴纳')
+        manual_deadline(c4, '张伟民', '赵国庆', '管辖权异议裁定的上诉期限', 'appeal', -2,
+                        False, '已逾期，需与当事人确认是否放弃')
+        manual_deadline(c5, '陈晓东', '张伟民', '补充财产线索', 'other', 12,
+                        False, '执行法官要求限期补充')
+        manual_deadline(c7, '李静怡', '王志强', '缴纳仲裁费余额', 'payment', 20,
+                        False, '人工补充收费通知')
+        manual_deadline(c8, '赵国庆', '张伟民', '上诉期限', 'appeal', -250,
+                        True, '双方均未上诉，调解书生效')
 
         self.stdout.write(self.style.SUCCESS(
             f'样例数据已生成：{Lawyer.objects.count()}名律师、'
             f'{Party.objects.count()}个当事人、{Case.objects.count()}个案件、'
-            f'{Hearing.objects.count()}次开庭、{Material.objects.count()}份材料、'
+            f'{DeadlineRule.objects.count()}条规则、{Holiday.objects.count()}个节假日、'
+            f'{DeadlineEvent.objects.count()}个起算事件、'
             f'{Deadline.objects.count()}项期限'))

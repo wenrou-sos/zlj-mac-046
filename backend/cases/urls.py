@@ -13,6 +13,10 @@ router.register('hearings', views.HearingViewSet, basename='hearing')
 router.register('stage-logs', views.StageLogViewSet, basename='stage-log')
 router.register('materials', views.MaterialViewSet, basename='material')
 router.register('deadlines', views.DeadlineViewSet, basename='deadline')
+router.register('deadline-events', views.DeadlineEventViewSet, basename='deadline-event')
+router.register('deadline-rules', views.DeadlineRuleViewSet, basename='deadline-rule')
+router.register('holidays', views.HolidayViewSet, basename='holiday')
+router.register('reminders', views.ReminderViewSet, basename='reminder')
 
 urlpatterns = [
     path('', include(router.urls)),
