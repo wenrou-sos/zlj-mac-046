@@ -16,6 +16,9 @@ class Lawyer(models.Model):
     title = models.CharField('职称', max_length=20, choices=TITLE_CHOICES, default='lawyer')
     phone = models.CharField('电话', max_length=20, blank=True)
     email = models.EmailField('邮箱', blank=True)
+    user = models.OneToOneField('auth.User', on_delete=models.SET_NULL, null=True,
+                                blank=True, related_name='lawyer',
+                                verbose_name='关联账号')
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -356,7 +359,7 @@ class BillLine(models.Model):
 
 
 class Payment(models.Model):
-    """收款记录（支持部分收款；冲正退款以负数记录）"""
+    """收款记录（支持部分收款；记录不可删除，错误以负数红冲更正）"""
     METHOD_CHOICES = [
         ('bank', '银行转账'),
         ('cash', '现金'),
@@ -369,6 +372,9 @@ class Payment(models.Model):
     method = models.CharField('收款方式', max_length=10,
                               choices=METHOD_CHOICES, default='bank')
     is_reversal = models.BooleanField('冲正退款', default=False)
+    reverses = models.ForeignKey('self', on_delete=models.SET_NULL, null=True,
+                                 blank=True, related_name='reversed_by',
+                                 verbose_name='红冲的原收款')
     notes = models.CharField('备注', max_length=200, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 

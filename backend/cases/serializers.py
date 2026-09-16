@@ -172,6 +172,15 @@ class FeeAgreementSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError({'fixed_amount': '固定收费须填写收费总额'})
         if fee_type == 'hourly':
             attrs['fixed_amount'] = None
+        # 约定总额不得调低到低于已出账的固定期款
+        if fee_type == 'fixed' and self.instance:
+            billed = sum(
+                (line.amount for line in BillLine.objects.filter(
+                    bill__case=self.instance.case, line_type='fixed')
+                 .exclude(bill__status='void')), Decimal('0'))
+            if fixed_amount < billed:
+                raise serializers.ValidationError(
+                    {'fixed_amount': f'已出账固定期款 ¥{billed}，约定总额不能低于该金额'})
         return attrs
 
 
@@ -293,12 +302,18 @@ class ExpenseSerializer(serializers.ModelSerializer):
 
 class PaymentSerializer(serializers.ModelSerializer):
     method_display = serializers.CharField(source='get_method_display', read_only=True)
+    is_reversed = serializers.SerializerMethodField()
 
     class Meta:
         model = Payment
         fields = ['id', 'bill', 'amount', 'received_date', 'method',
-                  'method_display', 'is_reversal', 'notes', 'created_at']
-        read_only_fields = ['is_reversal']
+                  'method_display', 'is_reversal', 'is_reversed', 'reverses',
+                  'notes', 'created_at']
+        read_only_fields = ['is_reversal', 'reverses']
+
+    def get_is_reversed(self, obj):
+        """该笔收款是否已被红冲"""
+        return obj.reversed_by.exists()
 
     def validate_amount(self, value):
         if value <= 0:
@@ -383,6 +398,25 @@ class BillCreateSerializer(serializers.Serializer):
 
     def validate(self, attrs):
         case = attrs['case']
+        agreement = getattr(case, 'fee_agreement', None)
+        fixed_lines = attrs['fixed_lines']
+
+        # 固定收费期款仅适用于固定收费约定，且累计不得超过约定总额
+        if fixed_lines:
+            if not agreement or agreement.fee_type != 'fixed':
+                raise serializers.ValidationError(
+                    {'fixed_lines': '仅固定收费约定的案件可以录入固定收费期款'})
+            new_total = sum((fl['amount'] for fl in fixed_lines), Decimal('0'))
+            billed = sum(
+                (line.amount for line in BillLine.objects.filter(
+                    bill__case=case, line_type='fixed')
+                 .exclude(bill__status='void')), Decimal('0'))
+            remaining = agreement.fixed_amount - billed
+            if new_total > remaining:
+                raise serializers.ValidationError(
+                    f'固定收费期款超出约定总额：约定 ¥{agreement.fixed_amount}，'
+                    f'已出账 ¥{billed}，剩余可出 ¥{remaining}')
+
         entries = list(TimeEntry.objects.filter(pk__in=attrs['time_entry_ids'],
                                                 case=case).select_related('lawyer'))
         if len(entries) != len(set(attrs['time_entry_ids'])):

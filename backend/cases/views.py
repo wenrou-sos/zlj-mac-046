@@ -1,12 +1,14 @@
 from datetime import date, timedelta
 from decimal import Decimal, InvalidOperation
 
+from django.contrib.auth import authenticate, login, logout
 from django.db import transaction
 from django.db.models import Count, Q
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import status, viewsets
-from rest_framework.decorators import action, api_view
+from rest_framework.decorators import action, api_view, permission_classes
+from rest_framework.permissions import AllowAny, IsAuthenticatedOrReadOnly
 from rest_framework.response import Response
 
 from .models import (Bill, Case, CaseLawyer, CaseParty, CaseRate, Deadline,
@@ -223,9 +225,64 @@ class DeadlineViewSet(viewsets.ModelViewSet):
 
 # ---------------------------------------------------------------- 费用与账单
 
-class FeeAgreementViewSet(viewsets.ModelViewSet):
+def _linked_lawyer(user):
+    """当前登录账号关联的律师档案"""
+    return getattr(user, 'lawyer', None)
+
+
+def _is_case_lead(user, case):
+    """是否本案主办律师（管理员视同负责人）"""
+    if not user.is_authenticated:
+        return False
+    if user.is_staff:
+        return True
+    lawyer = _linked_lawyer(user)
+    return bool(lawyer) and CaseLawyer.objects.filter(
+        case=case, lawyer=lawyer, role='lead').exists()
+
+
+def _forbid(detail):
+    return Response({'detail': detail}, status=status.HTTP_403_FORBIDDEN)
+
+
+def _check_case_lead(user, case):
+    if _is_case_lead(user, case):
+        return None
+    return _forbid('仅本案主办律师或管理员可以执行该操作')
+
+
+class CaseLeadWriteMixin:
+    """写操作要求登录，且为本案主办律师/管理员"""
+
+    def _case_from_request(self):
+        case_id = self.request.data.get('case')
+        return Case.objects.filter(pk=case_id).first() if case_id else None
+
+    def create(self, request, *args, **kwargs):
+        case = self._case_from_request()
+        if case is not None:
+            resp = _check_case_lead(request.user, case)
+            if resp:
+                return resp
+        return super().create(request, *args, **kwargs)
+
+    def update(self, request, *args, **kwargs):
+        resp = _check_case_lead(request.user, self.get_object().case)
+        return resp or super().update(request, *args, **kwargs)
+
+    def partial_update(self, request, *args, **kwargs):
+        resp = _check_case_lead(request.user, self.get_object().case)
+        return resp or super().partial_update(request, *args, **kwargs)
+
+    def destroy(self, request, *args, **kwargs):
+        resp = _check_case_lead(request.user, self.get_object().case)
+        return resp or super().destroy(request, *args, **kwargs)
+
+
+class FeeAgreementViewSet(CaseLeadWriteMixin, viewsets.ModelViewSet):
     """案件收费约定（固定收费/按工时收费，一案一份）"""
     serializer_class = FeeAgreementSerializer
+    permission_classes = [IsAuthenticatedOrReadOnly]
 
     def get_queryset(self):
         qs = FeeAgreement.objects.select_related('case')
@@ -235,9 +292,10 @@ class FeeAgreementViewSet(viewsets.ModelViewSet):
         return qs
 
 
-class CaseRateViewSet(viewsets.ModelViewSet):
+class CaseRateViewSet(CaseLeadWriteMixin, viewsets.ModelViewSet):
     """计时费率：按生效日期记录，变更仅影响生效日之后提交的工时"""
     serializer_class = CaseRateSerializer
+    permission_classes = [IsAuthenticatedOrReadOnly]
 
     def get_queryset(self):
         qs = CaseRate.objects.select_related('case', 'lawyer')
@@ -261,17 +319,23 @@ def _approve_or_reject(instance, approve):
 
 
 class ApproveFlowMixin:
-    """核准/退回/删除保护（工时与代垫费用共用）"""
+    """核准/退回（仅主办律师或管理员）与删除保护（工时与代垫费用共用）"""
 
     @action(detail=True, methods=['post'])
     def approve(self, request, pk=None):
         obj = self.get_object()
+        resp = _check_case_lead(request.user, obj.case)
+        if resp:
+            return resp
         resp = _approve_or_reject(obj, approve=True)
         return resp or Response(self.get_serializer(obj).data)
 
     @action(detail=True, methods=['post'])
     def reject(self, request, pk=None):
         obj = self.get_object()
+        resp = _check_case_lead(request.user, obj.case)
+        if resp:
+            return resp
         resp = _approve_or_reject(obj, approve=False)
         return resp or Response(self.get_serializer(obj).data)
 
@@ -280,11 +344,42 @@ class ApproveFlowMixin:
         if obj.status != 'pending':
             return Response({'detail': '仅待核准记录可以删除'},
                             status=status.HTTP_400_BAD_REQUEST)
+        lawyer = _linked_lawyer(request.user)
+        is_owner = lawyer and lawyer.id == obj.lawyer_id
+        if not (is_owner or _is_case_lead(request.user, obj.case)):
+            return _forbid('仅本人、本案主办律师或管理员可以删除')
         return super().destroy(request, *args, **kwargs)
+
+    def _check_submit_self(self, request, instance=None):
+        """非管理员只能以本人（关联律师）名义提交/修改"""
+        user = request.user
+        if user.is_staff:
+            return None
+        lawyer = _linked_lawyer(user)
+        if not lawyer:
+            return _forbid('当前账号未关联律师档案，不能提交')
+        target = request.data.get(
+            'lawyer', instance.lawyer_id if instance is not None else None)
+        if str(target) != str(lawyer.id):
+            return _forbid('只能以本人名义提交/修改工时/费用')
+        return None
+
+    def create(self, request, *args, **kwargs):
+        resp = self._check_submit_self(request)
+        return resp or super().create(request, *args, **kwargs)
+
+    def update(self, request, *args, **kwargs):
+        resp = self._check_submit_self(request, instance=self.get_object())
+        return resp or super().update(request, *args, **kwargs)
+
+    def partial_update(self, request, *args, **kwargs):
+        resp = self._check_submit_self(request, instance=self.get_object())
+        return resp or super().partial_update(request, *args, **kwargs)
 
 
 class TimeEntryViewSet(ApproveFlowMixin, viewsets.ModelViewSet):
     serializer_class = TimeEntrySerializer
+    permission_classes = [IsAuthenticatedOrReadOnly]
 
     def get_queryset(self):
         qs = TimeEntry.objects.select_related('case', 'lawyer', 'bill_line__bill')
@@ -298,6 +393,7 @@ class TimeEntryViewSet(ApproveFlowMixin, viewsets.ModelViewSet):
 
 class ExpenseViewSet(ApproveFlowMixin, viewsets.ModelViewSet):
     serializer_class = ExpenseSerializer
+    permission_classes = [IsAuthenticatedOrReadOnly]
 
     def get_queryset(self):
         qs = Expense.objects.select_related('case', 'lawyer', 'bill_line__bill')
@@ -310,8 +406,9 @@ class ExpenseViewSet(ApproveFlowMixin, viewsets.ModelViewSet):
 
 
 class BillViewSet(viewsets.ModelViewSet):
-    """分期账单：生成、收款、减免、冲正；已收款账单不能直接删除"""
+    """分期账单：生成、收款、减免、冲正；有收款记录的账单不能删除"""
     http_method_names = ['get', 'post', 'delete', 'head', 'options']
+    permission_classes = [IsAuthenticatedOrReadOnly]
 
     def get_queryset(self):
         qs = (Bill.objects.select_related('case')
@@ -327,6 +424,11 @@ class BillViewSet(viewsets.ModelViewSet):
         return BillSerializer
 
     def create(self, request, *args, **kwargs):
+        case = Case.objects.filter(pk=request.data.get('case')).first()
+        if case is not None:
+            resp = _check_case_lead(request.user, case)
+            if resp:
+                return resp
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         bill = serializer.save()
@@ -334,11 +436,14 @@ class BillViewSet(viewsets.ModelViewSet):
 
     def destroy(self, request, *args, **kwargs):
         bill = self.get_object()
+        resp = _check_case_lead(request.user, bill.case)
+        if resp:
+            return resp
         if bill.status == 'void':
             return Response({'detail': '已冲正账单不能删除'},
                             status=status.HTTP_400_BAD_REQUEST)
         if bill.payments.exists():
-            return Response({'detail': '已收款账单不能直接删除，如需作废请使用冲正'},
+            return Response({'detail': '已有收款记录的账单不能删除，如需作废请使用冲正'},
                             status=status.HTTP_400_BAD_REQUEST)
         with transaction.atomic():
             self._release_lines(bill)
@@ -366,6 +471,9 @@ class BillViewSet(viewsets.ModelViewSet):
     def reduction(self, request, pk=None):
         """费用减免：设置减免金额（绝对值），需说明原因"""
         bill = self.get_object()
+        resp = _check_case_lead(request.user, bill.case)
+        if resp:
+            return resp
         if bill.status == 'void':
             return Response({'detail': '账单已冲正'}, status=status.HTTP_400_BAD_REQUEST)
         try:
@@ -394,6 +502,9 @@ class BillViewSet(viewsets.ModelViewSet):
     def void(self, request, pk=None):
         """冲正：账单作废，已收款自动生成负数退款记录，工时/费用释放回已核准"""
         bill = self.get_object()
+        resp = _check_case_lead(request.user, bill.case)
+        if resp:
+            return resp
         if bill.status == 'void':
             return Response({'detail': '账单已冲正'}, status=status.HTTP_400_BAD_REQUEST)
         reason = request.data.get('reason', '').strip()
@@ -417,9 +528,10 @@ class BillViewSet(viewsets.ModelViewSet):
 
 
 class PaymentViewSet(viewsets.ModelViewSet):
-    """收款记录：支持部分收款；删除收款会回写账单状态"""
+    """收款记录：支持部分收款；记录不可删除，录入错误以红冲（负数记录）更正"""
     serializer_class = PaymentSerializer
-    http_method_names = ['get', 'post', 'delete', 'head', 'options']
+    http_method_names = ['get', 'post', 'head', 'options']
+    permission_classes = [IsAuthenticatedOrReadOnly]
 
     def get_queryset(self):
         qs = Payment.objects.select_related('bill')
@@ -428,18 +540,80 @@ class PaymentViewSet(viewsets.ModelViewSet):
             qs = qs.filter(bill_id=bill_id)
         return qs
 
-    def destroy(self, request, *args, **kwargs):
+    def create(self, request, *args, **kwargs):
+        bill = Bill.objects.filter(pk=request.data.get('bill')).first()
+        if bill is not None:
+            resp = _check_case_lead(request.user, bill.case)
+            if resp:
+                return resp
+        return super().create(request, *args, **kwargs)
+
+    @action(detail=True, methods=['post'])
+    def reverse(self, request, pk=None):
+        """红冲某笔收款：生成等额负数记录，保留完整审计轨迹"""
         payment = self.get_object()
+        resp = _check_case_lead(request.user, payment.bill.case)
+        if resp:
+            return resp
         if payment.bill.status == 'void':
-            return Response({'detail': '账单已冲正，收款记录不能删除'},
+            return Response({'detail': '账单已冲正'},
                             status=status.HTTP_400_BAD_REQUEST)
         if payment.is_reversal:
-            return Response({'detail': '冲正退款记录不能删除'},
+            return Response({'detail': '冲正记录不能再红冲'},
                             status=status.HTTP_400_BAD_REQUEST)
-        bill = payment.bill
-        response = super().destroy(request, *args, **kwargs)
-        bill.refresh_status()
-        return response
+        if payment.reversed_by.exists():
+            return Response({'detail': '该笔收款已被红冲'},
+                            status=status.HTTP_400_BAD_REQUEST)
+        reason = request.data.get('reason', '').strip()
+        if not reason:
+            return Response({'detail': '请填写红冲原因'},
+                            status=status.HTTP_400_BAD_REQUEST)
+        reversal = Payment.objects.create(
+            bill=payment.bill, amount=-payment.amount,
+            received_date=date.today(), method=payment.method,
+            is_reversal=True, reverses=payment, notes=f'红冲：{reason}')
+        payment.bill.refresh_status()
+        return Response(PaymentSerializer(reversal).data,
+                        status=status.HTTP_201_CREATED)
+
+
+# ---------------------------------------------------------------- 登录认证
+
+def _me_payload(user):
+    lawyer = _linked_lawyer(user)
+    return {
+        'username': user.username,
+        'is_staff': user.is_staff,
+        'lawyer_id': lawyer.id if lawyer else None,
+        'name': lawyer.name if lawyer else user.username,
+    }
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def auth_me(request):
+    """当前登录用户信息（匿名返回 user=null）"""
+    user = request.user
+    return Response({'user': _me_payload(user) if user.is_authenticated else None})
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def auth_login(request):
+    user = authenticate(request,
+                        username=request.data.get('username', ''),
+                        password=request.data.get('password', ''))
+    if user is None:
+        return Response({'detail': '用户名或密码错误'},
+                        status=status.HTTP_400_BAD_REQUEST)
+    login(request, user)
+    return Response({'user': _me_payload(user)})
+
+
+@api_view(['POST'])
+def auth_logout(request):
+    logout(request)
+    return Response({'user': None})
 
 
 @api_view(['GET'])

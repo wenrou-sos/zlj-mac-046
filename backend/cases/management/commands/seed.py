@@ -45,6 +45,20 @@ class Command(BaseCommand):
             lawyers[name] = Lawyer.objects.create(
                 name=name, bar_number=bar, title=title, phone=phone, email=email)
 
+        # ---------- 登录账号（管理员 admin/admin123，律师 用户名/lawyer123） ----------
+        from django.contrib.auth.models import User
+        if not User.objects.filter(username='admin').exists():
+            User.objects.create_superuser('admin', 'admin@lawfirm.cn', 'admin123')
+        for name in lawyers:
+            username = lawyers[name].email.split('@')[0]
+            user, created = User.objects.get_or_create(
+                username=username, defaults={'email': lawyers[name].email})
+            if created:
+                user.set_password('lawyer123')
+                user.save()
+            lawyers[name].user = user
+            lawyers[name].save(update_fields=['user'])
+
         # ---------- 当事人 ----------
         parties = {}
         for name, ptype, idno, phone, addr in [

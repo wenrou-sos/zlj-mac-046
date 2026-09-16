@@ -86,3 +86,11 @@
 2026-09-15 17:01:36.578 UTC [222] LOG:  checkpoint complete: wrote 108 buffers (0.7%); 0 WAL file(s) added, 0 removed, 0 recycled; write=11.060 s, sync=0.049 s, total=11.124 s; sync files=94, longest=0.004 s, average=0.001 s; distance=278 kB, estimate=483 kB; lsn=0/1B7A2C0, redo lsn=0/1B7A230
 2026-09-15 17:06:25.684 UTC [222] LOG:  checkpoint starting: time
 2026-09-15 17:06:26.340 UTC [222] LOG:  checkpoint complete: wrote 6 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.637 s, sync=0.004 s, total=0.659 s; sync files=4, longest=0.002 s, average=0.001 s; distance=6 kB, estimate=436 kB; lsn=0/1B7BD98, redo lsn=0/1B7BD40
+2026-09-16 03:41:34.343 UTC [222] LOG:  checkpoint starting: time
+2026-09-16 03:41:48.853 UTC [222] LOG:  checkpoint complete: wrote 139 buffers (0.8%); 0 WAL file(s) added, 0 removed, 0 recycled; write=14.453 s, sync=0.046 s, total=14.510 s; sync files=122, longest=0.002 s, average=0.001 s; distance=381 kB, estimate=430 kB; lsn=0/1BDB418, redo lsn=0/1BDB388
+2026-09-16 04:01:35.067 UTC [222] LOG:  checkpoint starting: time
+2026-09-16 04:01:48.476 UTC [222] LOG:  checkpoint complete: wrote 132 buffers (0.8%); 1 WAL file(s) added, 0 removed, 0 recycled; write=13.332 s, sync=0.045 s, total=13.410 s; sync files=105, longest=0.003 s, average=0.001 s; distance=455 kB, estimate=455 kB; lsn=0/1C4D118, redo lsn=0/1C4D0C0
+2026-09-16 04:06:35.572 UTC [222] LOG:  checkpoint starting: time
+2026-09-16 04:06:51.182 UTC [222] LOG:  checkpoint complete: wrote 152 buffers (0.9%); 0 WAL file(s) added, 0 removed, 0 recycled; write=15.583 s, sync=0.016 s, total=15.611 s; sync files=117, longest=0.006 s, average=0.001 s; distance=620 kB, estimate=620 kB; lsn=0/1CE8500, redo lsn=0/1CE8470
+2026-09-16 04:11:35.277 UTC [222] LOG:  checkpoint starting: time
+2026-09-16 04:11:47.523 UTC [222] LOG:  checkpoint complete: wrote 119 buffers (0.7%); 0 WAL file(s) added, 0 removed, 0 recycled; write=12.200 s, sync=0.037 s, total=12.246 s; sync files=104, longest=0.003 s, average=0.001 s; distance=332 kB, estimate=592 kB; lsn=0/1D3B5C8, redo lsn=0/1D3B538

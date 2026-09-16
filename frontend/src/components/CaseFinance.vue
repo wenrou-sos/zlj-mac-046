@@ -1,5 +1,7 @@
 <template>
   <div v-loading="loading">
+    <el-alert v-if="!auth.user" type="warning" :closable="false" style="margin-bottom: 12px"
+      title="当前为匿名浏览：提交工时/费用、核准、出账与收款需先登录（右上角）" />
     <!-- 汇总：应收/已收/未收，标的额仅作参考、不参与律师费统计 -->
     <div class="fin-summary">
       <div class="stat">
@@ -35,7 +37,7 @@
       <template #header>
         <div class="card-head">
           <span>收费约定</span>
-          <el-button type="primary" size="small" @click="openAgreementDialog">
+          <el-button v-if="canManage" type="primary" size="small" @click="openAgreementDialog">
             {{ agreement ? '修改约定' : '设置收费约定' }}
           </el-button>
         </div>
@@ -57,7 +59,7 @@
         <template v-if="agreement.fee_type === 'hourly'">
           <div class="section-bar">
             <span class="section-title">计时费率</span>
-            <el-button size="small" @click="openRateDialog">设置/变更费率</el-button>
+            <el-button v-if="canManage" size="small" @click="openRateDialog">设置/变更费率</el-button>
           </div>
           <el-table :data="rates" size="small">
             <el-table-column prop="lawyer_name" label="律师" width="120" />
@@ -84,7 +86,7 @@
       <template #header>
         <div class="card-head">
           <span>工时记录</span>
-          <el-button type="primary" size="small" @click="openTimeDialog">记工时</el-button>
+          <el-button v-if="auth.user" type="primary" size="small" @click="openTimeDialog">记工时</el-button>
         </div>
       </template>
       <el-table :data="timeEntries" size="small">
@@ -119,11 +121,11 @@
         </el-table-column>
         <el-table-column label="操作" width="150">
           <template #default="{ row }">
-            <el-button v-if="row.status === 'pending'" link type="success" size="small"
+            <el-button v-if="canManage && row.status === 'pending'" link type="success" size="small"
               @click="approve('/time-entries/', row)">核准</el-button>
-            <el-button v-if="row.status === 'approved'" link type="warning" size="small"
+            <el-button v-if="canManage && row.status === 'approved'" link type="warning" size="small"
               @click="reject('/time-entries/', row)">退回</el-button>
-            <el-popconfirm v-if="row.status === 'pending'" title="确定删除该工时记录？"
+            <el-popconfirm v-if="canEditEntry(row)" title="确定删除该工时记录？"
               @confirm="delEntry('/time-entries/', row)">
               <template #reference>
                 <el-button link type="danger" size="small">删除</el-button>
@@ -140,7 +142,7 @@
       <template #header>
         <div class="card-head">
           <span>代垫费用</span>
-          <el-button type="primary" size="small" @click="expenseDialog = true">登记费用</el-button>
+          <el-button v-if="auth.user" type="primary" size="small" @click="openExpenseDialog">登记费用</el-button>
         </div>
       </template>
       <el-table :data="expenses" size="small">
@@ -168,11 +170,11 @@
         </el-table-column>
         <el-table-column label="操作" width="150">
           <template #default="{ row }">
-            <el-button v-if="row.status === 'pending'" link type="success" size="small"
+            <el-button v-if="canManage && row.status === 'pending'" link type="success" size="small"
               @click="approve('/expenses/', row)">核准</el-button>
-            <el-button v-if="row.status === 'approved'" link type="warning" size="small"
+            <el-button v-if="canManage && row.status === 'approved'" link type="warning" size="small"
               @click="reject('/expenses/', row)">退回</el-button>
-            <el-popconfirm v-if="row.status === 'pending'" title="确定删除该费用记录？"
+            <el-popconfirm v-if="canEditEntry(row)" title="确定删除该费用记录？"
               @confirm="delEntry('/expenses/', row)">
               <template #reference>
                 <el-button link type="danger" size="small">删除</el-button>
@@ -189,7 +191,7 @@
       <template #header>
         <div class="card-head">
           <span>分期账单</span>
-          <el-button type="primary" size="small" @click="openBillDialog">生成账单</el-button>
+          <el-button v-if="canManage" type="primary" size="small" @click="openBillDialog">生成账单</el-button>
         </div>
       </template>
       <el-table :data="bills" size="small">
@@ -230,7 +232,7 @@
             <el-button link type="primary" size="small" @click="openBillDetail(row)">
               明细
             </el-button>
-            <template v-if="row.status !== 'void'">
+            <template v-if="canManage && row.status !== 'void'">
               <el-button v-if="Number(row.outstanding) > 0" link type="success" size="small"
                 @click="openPaymentDialog(row)">收款</el-button>
               <el-button link type="warning" size="small"
@@ -415,6 +417,9 @@
         固定收费期款
         <el-button size="small" link type="primary" @click="addFixedLine">+ 添加一行</el-button>
       </div>
+      <el-alert v-if="agreement?.fee_type === 'fixed'" type="info" :closable="false"
+        style="margin-bottom: 8px"
+        :title="`约定总额 ¥${fmt(agreement.fixed_amount)}，已出账 ¥${fmt(fixedBilled)}，剩余可出 ¥${fmt(fixedRemaining)}`" />
       <div v-for="(line, i) in billForm.fixed_lines" :key="i" class="fixed-line">
         <el-input v-model="line.description" placeholder="如 固定收费第二期（一审开庭）"
           style="flex: 1" />
@@ -473,7 +478,7 @@
           </el-table-column>
         </el-table>
 
-        <div class="pick-title">收款记录</div>
+        <div class="pick-title">收款记录（收款不可删除，录入错误以红冲更正）</div>
         <el-table :data="currentBill.payments" size="small">
           <el-table-column prop="received_date" label="收款日期" width="110" />
           <el-table-column prop="method_display" label="方式" width="100" />
@@ -486,17 +491,18 @@
           </el-table-column>
           <el-table-column prop="notes" label="备注" min-width="160">
             <template #default="{ row }">
-              {{ row.notes }}<span v-if="row.is_reversal" class="sub">（冲正退款）</span>
+              {{ row.notes }}
+              <el-tag v-if="row.is_reversal" size="small" type="danger" effect="plain">冲正退款</el-tag>
+              <el-tag v-else-if="row.is_reversed" size="small" type="info" effect="plain">已红冲</el-tag>
             </template>
           </el-table-column>
           <el-table-column label="操作" width="70">
             <template #default="{ row }">
-              <el-popconfirm v-if="!row.is_reversal && currentBill.status !== 'void'"
-                title="确定删除该收款记录？" @confirm="delPayment(row)">
-                <template #reference>
-                  <el-button link type="danger" size="small">删除</el-button>
-                </template>
-              </el-popconfirm>
+              <el-button
+                v-if="canManage && currentBill.status !== 'void'
+                      && !row.is_reversal && !row.is_reversed"
+                link type="danger" size="small"
+                @click="reversePayment(row)">红冲</el-button>
             </template>
           </el-table-column>
         </el-table>
@@ -570,6 +576,7 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import api from '../api'
+import { auth } from '../auth'
 
 const props = defineProps({
   caseId: { type: [String, Number], required: true },
@@ -617,7 +624,29 @@ const billForm = reactive({
 const paymentForm = reactive({ amount: null, received_date: today, method: 'bank', notes: '' })
 const reductionForm = reactive({ amount: 0, reason: '' })
 
-const lawyerOptions = computed(() => props.caseLawyers.map((cl) => cl.lawyer))
+const lawyerOptions = computed(() => {
+  // 非管理员只能以本人名义提交
+  if (auth.user && !auth.user.is_staff && auth.user.lawyer_id) {
+    return props.caseLawyers
+      .map((cl) => cl.lawyer)
+      .filter((l) => l.id === auth.user.lawyer_id)
+  }
+  return props.caseLawyers.map((cl) => cl.lawyer)
+})
+/** 是否本案负责人（主办律师或管理员）：核准/出账/收款/减免/冲正 */
+const canManage = computed(() => {
+  const user = auth.user
+  if (!user) return false
+  if (user.is_staff) return true
+  return props.caseLawyers.some(
+    (cl) => cl.role === 'lead' && cl.lawyer.id === user.lawyer_id)
+})
+/** 是否可删除某条待核准工时/费用（本人或负责人） */
+const canEditEntry = (row) => {
+  if (row.status !== 'pending') return false
+  if (canManage.value) return true
+  return auth.user && row.lawyer === auth.user.lawyer_id
+}
 const isHourly = computed(() => agreement.value?.fee_type === 'hourly')
 const approvedTimeEntries = computed(() =>
   timeEntries.value.filter((e) => e.status === 'approved' && e.hourly_rate))
@@ -626,6 +655,17 @@ const approvedExpenses = computed(() =>
 const unbilledTotal = computed(() =>
   Number(summary.value.unbilled_time_amount || 0) +
   Number(summary.value.unbilled_expense_amount || 0))
+/** 固定收费已出账期款合计（不含已冲正账单） */
+const fixedBilled = computed(() =>
+  bills.value
+    .filter((b) => b.status !== 'void')
+    .flatMap((b) => b.lines)
+    .filter((l) => l.line_type === 'fixed')
+    .reduce((s, l) => s + Number(l.amount), 0))
+const fixedRemaining = computed(() =>
+  agreement.value?.fee_type === 'fixed'
+    ? Number(agreement.value.fixed_amount) - fixedBilled.value
+    : 0)
 const billTotal = computed(() => {
   const t = billForm.selectedEntries.reduce((s, e) => s + Number(e.amount), 0)
   const x = billForm.selectedExpenses.reduce((s, e) => s + Number(e.amount), 0)
@@ -704,9 +744,23 @@ async function saveRate() {
 }
 
 /* ---------- 工时与费用 ---------- */
+function defaultLawyer() {
+  return lawyerOptions.value.length === 1 ? lawyerOptions.value[0].id : null
+}
+
 function openTimeDialog() {
-  Object.assign(timeForm, { lawyer: null, work_date: today, hours: 1, description: '' })
+  Object.assign(timeForm, {
+    lawyer: defaultLawyer(), work_date: today, hours: 1, description: '',
+  })
   timeDialog.value = true
+}
+
+function openExpenseDialog() {
+  Object.assign(expenseForm, {
+    lawyer: defaultLawyer(), expense_date: today, category: 'court_fee',
+    amount: null, description: '',
+  })
+  expenseDialog.value = true
 }
 
 async function saveTimeEntry() {
@@ -730,7 +784,7 @@ async function saveExpense() {
   ElMessage.success('费用已提交，待负责人核准')
   expenseDialog.value = false
   Object.assign(expenseForm, {
-    lawyer: null, expense_date: today, category: 'court_fee', amount: null, description: '',
+    lawyer: defaultLawyer(), expense_date: today, category: 'court_fee', amount: null, description: '',
   })
   load()
 }
@@ -770,6 +824,11 @@ function addFixedLine() {
 
 async function createBill() {
   const fixedLines = billForm.fixed_lines.filter((l) => l.description && l.amount)
+  const fixedSum = fixedLines.reduce((s, l) => s + Number(l.amount), 0)
+  if (agreement.value?.fee_type === 'fixed' && fixedSum > fixedRemaining.value) {
+    ElMessage.warning(`固定期款合计超出剩余可出额度 ¥${fmt(fixedRemaining.value)}`)
+    return
+  }
   await api.post('/bills/', {
     case: Number(props.caseId),
     title: billForm.title,
@@ -813,10 +872,19 @@ async function savePayment() {
   load()
 }
 
-async function delPayment(row) {
-  await api.delete(`/payments/${row.id}/`)
-  ElMessage.success('收款记录已删除')
-  load()
+async function reversePayment(row) {
+  try {
+    const { value } = await ElMessageBox.prompt(
+      `将以等额负数记录红冲该笔收款 ¥${fmt(row.amount)}，原记录保留。请输入红冲原因：`,
+      '收款红冲',
+      { confirmButtonText: '确认红冲', cancelButtonText: '取消', inputPlaceholder: '红冲原因' },
+    )
+    await api.post(`/payments/${row.id}/reverse/`, { reason: value })
+    ElMessage.success('已红冲')
+    load()
+  } catch (e) {
+    // 用户取消
+  }
 }
 
 function openReductionDialog(row) {
