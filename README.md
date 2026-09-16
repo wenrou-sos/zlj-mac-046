@@ -12,6 +12,7 @@
 | 当事人管理 | 自然人/法人档案，证件号、联系方式 |
 | 律师管理 | 执业证号、职称、联系方式 |
 | 利益冲突检查 | ① 全局检索：按姓名/名称/证件号检查当事人在本所的全部涉诉记录，输出高/中/低风险结论；② 添加当事人到案件时自动预检，发现直接冲突（如系本所在办案件客户）将阻止保存 |
+| 律师费与账单 | 按案件约定固定收费或按工时收费；律师提交工时与代垫费用，负责人核准后生成分期账单；费率按生效日管理、变更只影响后续工作，已出账项目保留当时计价依据；同一工时/费用不可重复出账；支持部分收款、费用减免与冲正，已收款账单不能直接删除；案件详情可追溯工作记录→应收→已收→未收，标的额与律师费分开核算 |
 
 ## 快速启动
 
@@ -36,6 +37,8 @@
 │   └── cases/          核心应用
 │       ├── models.py       Lawyer / Party / Case / CaseParty / CaseLawyer
 │       │                   Hearing / StageLog / Material / Deadline
+│       │                   FeeAgreement / CaseRate / TimeEntry / Expense
+│       │                   Bill / BillLine / Payment
 │       ├── views.py        REST ViewSet + 工作台统计 + 冲突检查
 │       └── management/commands/seed.py   样例数据
 ├── frontend/           Vue 3 + Vite + Element Plus + vue-router + axios
@@ -61,3 +64,11 @@
 | GET/POST | `/api/case-parties/` `/api/case-lawyers/` | 案件-当事人 / 案件-律师关联 |
 | GET/POST | `/api/hearings/` `/api/stage-logs/` `/api/materials/` `/api/deadlines/` | 开庭 / 阶段 / 材料 / 期限（支持 `?case={id}` 过滤） |
 | GET | `/api/deadlines/?upcoming=1&days=30` | 未来 N 天待办期限 |
+| GET | `/api/cases/{id}/finance/` | 案件财务全景：约定/费率/工时/费用/账单 + 应收/已收/未收汇总 |
+| GET/POST/PATCH | `/api/fee-agreements/` | 收费约定（固定收费/按工时收费，一案一份） |
+| GET/POST | `/api/case-rates/` | 计时费率（按生效日期，变更不影响既往） |
+| GET/POST/PATCH | `/api/time-entries/` `/api/expenses/` | 工时 / 代垫费用（提交时快照费率） |
+| POST | `/api/time-entries/{id}/approve/` `/reject/` | 核准 / 退回（费用同） |
+| GET/POST/DELETE | `/api/bills/` | 账单：POST 勾选已核准工时/费用或固定期款生成；已收款账单禁止删除 |
+| POST | `/api/bills/{id}/reduction/` `/void/` | 费用减免 / 冲正（自动生成负数退款、释放工时费用） |
+| GET/POST/DELETE | `/api/payments/` | 收款记录（支持部分收款，不可超额） |

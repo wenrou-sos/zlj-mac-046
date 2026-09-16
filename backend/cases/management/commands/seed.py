@@ -1,11 +1,13 @@
 """内置样例案件数据：python manage.py seed"""
 from datetime import date, datetime, timedelta
+from decimal import Decimal
 
 from django.core.management.base import BaseCommand
 from django.utils import timezone
 
-from cases.models import (Case, CaseLawyer, CaseParty, Deadline, Hearing,
-                          Lawyer, Material, Party, StageLog)
+from cases.models import (Bill, BillLine, Case, CaseLawyer, CaseParty,
+                          CaseRate, Deadline, Expense, FeeAgreement, Hearing,
+                          Lawyer, Material, Party, Payment, StageLog, TimeEntry)
 
 TODAY = date.today()
 
@@ -25,7 +27,8 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         # 清空旧数据（顺序：关联表 -> 主表）
-        for model in (Hearing, StageLog, Material, Deadline,
+        for model in (BillLine, Payment, Bill, TimeEntry, Expense, CaseRate,
+                      FeeAgreement, Hearing, StageLog, Material, Deadline,
                       CaseParty, CaseLawyer, Case, Party, Lawyer):
             model.objects.all().delete()
 
@@ -222,8 +225,124 @@ class Command(BaseCommand):
             Deadline.objects.create(case=case, title=title, deadline_type=dtype,
                                     due_date=d(days), is_done=done, notes=notes)
 
+        # ---------- 收费约定与费率 ----------
+        FeeAgreement.objects.create(case=c1, fee_type='hourly',
+                                    notes='按承办律师实际工时结算，按月出账')
+        FeeAgreement.objects.create(case=c2, fee_type='hourly',
+                                    notes='二审阶段按工时收费')
+        FeeAgreement.objects.create(case=c3, fee_type='fixed',
+                                    fixed_amount=Decimal('150000'),
+                                    notes='固定收费15万元，签约/开庭/结案三期各5万')
+        FeeAgreement.objects.create(case=c5, fee_type='fixed',
+                                    fixed_amount=Decimal('200000'),
+                                    notes='固定收费20万元，恢复执行立案后先收50%')
+        FeeAgreement.objects.create(case=c7, fee_type='hourly',
+                                    notes='仲裁程序按工时收费')
+
+        # 费率按生效日期记录：张伟民自 d(-20) 起费率由 2500 调整为 2800，
+        # 此前提交的工时仍按 2500 计价
+        for case, lname, rate, days in [
+            (c1, '张伟民', '2500', -95), (c1, '张伟民', '2800', -20),
+            (c1, '陈晓东', '1200', -95),
+            (c2, '李静怡', '2000', -60),
+            (c7, '李静怡', '2000', -15), (c7, '王志强', '1500', -15),
+        ]:
+            CaseRate.objects.create(case=case, lawyer=lawyers[lname],
+                                    hourly_rate=Decimal(rate),
+                                    effective_date=d(days))
+
+        # ---------- 工时记录 ----------
+        def time_entry(case, lname, days, hours, desc, rate, status_):
+            return TimeEntry.objects.create(
+                case=case, lawyer=lawyers[lname], work_date=d(days),
+                hours=Decimal(hours), description=desc,
+                hourly_rate=Decimal(rate) if rate else None, status=status_,
+                approved_at=dt(days) if status_ != 'pending' else None)
+
+        te1 = time_entry(c1, '张伟民', -90, '3', '案情分析、起诉状起草', '2500', 'billed')
+        te2 = time_entry(c1, '张伟民', -80, '2', '证据梳理与补充取证指引', '2500', 'billed')
+        te3 = time_entry(c1, '陈晓东', -75, '4', '证据清单整理(12组)', '1200', 'billed')
+        time_entry(c1, '张伟民', -10, '2.5', '庭前会议及庭审方案讨论', '2800', 'approved')
+        time_entry(c1, '陈晓东', -5, '3', '代理词起草', '1200', 'pending')
+        time_entry(c1, '张伟民', -2, '1.5', '与当事人沟通庭审安排', '2800', 'pending')
+        time_entry(c2, '李静怡', -50, '4', '二审答辩意见起草', '2000', 'approved')
+        time_entry(c2, '李静怡', -30, '2', '一审卷宗阅卷', '2000', 'approved')
+        time_entry(c7, '李静怡', -12, '2', '仲裁申请书起草', '2000', 'approved')
+        time_entry(c7, '王志强', -8, '3', '证据交换材料准备', '1500', 'pending')
+
+        # ---------- 代垫费用 ----------
+        def expense(case, lname, days, cat, amount, desc, status_):
+            return Expense.objects.create(
+                case=case, lawyer=lawyers[lname], expense_date=d(days),
+                category=cat, amount=Decimal(amount), description=desc,
+                status=status_,
+                approved_at=dt(days) if status_ != 'pending' else None)
+
+        ex1 = expense(c1, '张伟民', -88, 'court_fee', '16300',
+                      '一审案件受理费', 'billed')
+        expense(c1, '陈晓东', -30, 'travel', '2360',
+                '赴天津调取证据差旅费', 'approved')
+        expense(c1, '陈晓东', -6, 'courier', '86', '证据材料快递费', 'pending')
+        expense(c3, '王志强', -35, 'travel', '1800',
+                '赴看守所会见差旅费', 'approved')
+        ex2 = expense(c5, '陈晓东', -110, 'other', '3200',
+                      '被执行人财产线索调查费', 'billed')
+
+        # ---------- 分期账单与收款 ----------
+        def make_bill(case, seq, title, issue_days, due_days, lines, payments,
+                      reduction=None, reduction_reason=''):
+            bill = Bill.objects.create(
+                case=case, bill_number=f'B{case.id:04d}-{seq:03d}', title=title,
+                issue_date=d(issue_days),
+                due_date=d(due_days) if due_days is not None else None,
+                reduction_amount=Decimal(reduction) if reduction else Decimal('0'),
+                reduction_reason=reduction_reason)
+            for line in lines:
+                BillLine.objects.create(bill=bill, **line)
+            for amount, days, method in payments:
+                Payment.objects.create(bill=bill, amount=Decimal(amount),
+                                       received_date=d(days), method=method)
+            bill.refresh_status()
+            return bill
+
+        def time_line(entry):
+            return dict(line_type='time',
+                        description=f'{entry.lawyer.name} {entry.work_date} '
+                                    f'{entry.description}',
+                        quantity=entry.hours, unit_price=entry.hourly_rate,
+                        amount=entry.amount, time_entry=entry)
+
+        def expense_line(exp):
+            return dict(line_type='expense',
+                        description=f'{exp.get_category_display()}：{exp.description}',
+                        amount=exp.amount, expense=exp)
+
+        # c1 第一期：3条工时 + 代垫诉讼费，已减免3600并部分收款2万
+        make_bill(c1, 1, '第一期（立案至8月工时及代垫费用）', -45, -30,
+                  [time_line(te1), time_line(te2), time_line(te3),
+                   expense_line(ex1)],
+                  [('20000', -40, 'bank')],
+                  reduction='3600', reduction_reason='长期合作客户优惠')
+        # c3 第一期签约款已结清，第二期开庭前已出账待收
+        make_bill(c3, 1, '第一期·委托签约款', -44, -34,
+                  [dict(line_type='fixed', description='固定收费第一期（签约）',
+                        amount=Decimal('50000'))],
+                  [('30000', -40, 'bank'), ('20000', -20, 'bank')])
+        make_bill(c3, 2, '第二期·一审开庭前', -14, 6,
+                  [dict(line_type='fixed', description='固定收费第二期（一审开庭）',
+                        amount=Decimal('50000'))],
+                  [])
+        # c5 第一期：固定收费50% + 财产调查费，已收5万
+        make_bill(c5, 1, '第一期·恢复执行立案', -100, -70,
+                  [dict(line_type='fixed', description='固定收费第一期（50%）',
+                        amount=Decimal('100000')),
+                   expense_line(ex2)],
+                  [('50000', -60, 'bank')])
+
         self.stdout.write(self.style.SUCCESS(
             f'样例数据已生成：{Lawyer.objects.count()}名律师、'
             f'{Party.objects.count()}个当事人、{Case.objects.count()}个案件、'
             f'{Hearing.objects.count()}次开庭、{Material.objects.count()}份材料、'
-            f'{Deadline.objects.count()}项期限'))
+            f'{Deadline.objects.count()}项期限、'
+            f'{TimeEntry.objects.count()}条工时、{Expense.objects.count()}笔费用、'
+            f'{Bill.objects.count()}张账单'))

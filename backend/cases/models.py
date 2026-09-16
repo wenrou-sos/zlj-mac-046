@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from django.db import models
 
 
@@ -174,6 +176,207 @@ class Material(models.Model):
 
     def __str__(self):
         return self.name
+
+
+class FeeAgreement(models.Model):
+    """案件收费约定（一案一份，与标的额无关）"""
+    FEE_TYPE_CHOICES = [
+        ('fixed', '固定收费'),
+        ('hourly', '按工时收费'),
+    ]
+    case = models.OneToOneField(Case, on_delete=models.CASCADE,
+                                related_name='fee_agreement')
+    fee_type = models.CharField('收费方式', max_length=10,
+                                choices=FEE_TYPE_CHOICES, default='hourly')
+    fixed_amount = models.DecimalField('固定收费总额(元)', max_digits=14,
+                                       decimal_places=2, null=True, blank=True)
+    notes = models.TextField('约定说明', blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f'{self.case.title} - {self.get_fee_type_display()}'
+
+
+class CaseRate(models.Model):
+    """案件内律师计时费率（按生效日期记录，变更不影响既往工作）"""
+    case = models.ForeignKey(Case, on_delete=models.CASCADE, related_name='case_rates')
+    lawyer = models.ForeignKey(Lawyer, on_delete=models.CASCADE)
+    hourly_rate = models.DecimalField('小时费率(元)', max_digits=10, decimal_places=2)
+    effective_date = models.DateField('生效日期')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ('case', 'lawyer', 'effective_date')
+        ordering = ['-effective_date', '-id']
+
+    def __str__(self):
+        return f'{self.lawyer.name} ¥{self.hourly_rate}/h 自{self.effective_date}'
+
+
+class WorkStatus(models.TextChoices):
+    PENDING = 'pending', '待核准'
+    APPROVED = 'approved', '已核准'
+    BILLED = 'billed', '已出账'
+
+
+class TimeEntry(models.Model):
+    """办案工时记录（提交时按工作日期快照当时费率）"""
+    case = models.ForeignKey(Case, on_delete=models.CASCADE, related_name='time_entries')
+    lawyer = models.ForeignKey(Lawyer, on_delete=models.CASCADE)
+    work_date = models.DateField('工作日期')
+    hours = models.DecimalField('工时(小时)', max_digits=5, decimal_places=2)
+    description = models.CharField('工作内容', max_length=200)
+    hourly_rate = models.DecimalField('适用费率快照(元/小时)', max_digits=10,
+                                      decimal_places=2, null=True, blank=True)
+    status = models.CharField('状态', max_length=10, choices=WorkStatus.choices,
+                              default=WorkStatus.PENDING)
+    approved_at = models.DateTimeField('核准时间', null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-work_date', '-id']
+
+    @property
+    def amount(self):
+        if self.hourly_rate is None:
+            return None
+        return (self.hours * self.hourly_rate).quantize(Decimal('0.01'))
+
+    def __str__(self):
+        return f'{self.lawyer.name} {self.work_date} {self.hours}h'
+
+
+class Expense(models.Model):
+    """代垫费用"""
+    CATEGORY_CHOICES = [
+        ('court_fee', '诉讼费/仲裁费'),
+        ('travel', '差旅费'),
+        ('notary', '公证费'),
+        ('appraisal', '鉴定费'),
+        ('courier', '快递/文印'),
+        ('other', '其他'),
+    ]
+    case = models.ForeignKey(Case, on_delete=models.CASCADE, related_name='expenses')
+    lawyer = models.ForeignKey(Lawyer, on_delete=models.CASCADE, verbose_name='代垫人')
+    expense_date = models.DateField('费用日期')
+    category = models.CharField('费用类别', max_length=20,
+                                choices=CATEGORY_CHOICES, default='other')
+    amount = models.DecimalField('金额(元)', max_digits=12, decimal_places=2)
+    description = models.CharField('费用说明', max_length=200)
+    status = models.CharField('状态', max_length=10, choices=WorkStatus.choices,
+                              default=WorkStatus.PENDING)
+    approved_at = models.DateTimeField('核准时间', null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-expense_date', '-id']
+
+    def __str__(self):
+        return f'{self.get_category_display()} ¥{self.amount}'
+
+
+class Bill(models.Model):
+    """分期账单"""
+    STATUS_CHOICES = [
+        ('open', '待收款'),
+        ('partial', '部分收款'),
+        ('paid', '已结清'),
+        ('void', '已冲正'),
+    ]
+    case = models.ForeignKey(Case, on_delete=models.CASCADE, related_name='bills')
+    bill_number = models.CharField('账单编号', max_length=30, unique=True)
+    title = models.CharField('期次/说明', max_length=100)
+    issue_date = models.DateField('出账日期')
+    due_date = models.DateField('付款期限', null=True, blank=True)
+    reduction_amount = models.DecimalField('减免金额(元)', max_digits=12,
+                                           decimal_places=2, default=0)
+    reduction_reason = models.CharField('减免原因', max_length=200, blank=True)
+    status = models.CharField('状态', max_length=10, choices=STATUS_CHOICES,
+                              default='open')
+    void_reason = models.CharField('冲正原因', max_length=200, blank=True)
+    voided_at = models.DateTimeField('冲正时间', null=True, blank=True)
+    notes = models.TextField('备注', blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-id']
+
+    @property
+    def total_amount(self):
+        return sum((line.amount for line in self.lines.all()), Decimal('0'))
+
+    @property
+    def received_amount(self):
+        return sum((p.amount for p in self.payments.all()), Decimal('0'))
+
+    @property
+    def outstanding(self):
+        return self.total_amount - self.reduction_amount - self.received_amount
+
+    def refresh_status(self):
+        """根据收款/减免情况刷新账单状态"""
+        if self.status == 'void':
+            return
+        if self.outstanding <= 0:
+            self.status = 'paid'
+        elif self.received_amount > 0 or self.reduction_amount > 0:
+            self.status = 'partial'
+        else:
+            self.status = 'open'
+        self.save(update_fields=['status'])
+
+    def __str__(self):
+        return f'{self.bill_number} {self.title}'
+
+
+class BillLine(models.Model):
+    """账单明细（工时/费用一对一关联，杜绝重复出账；金额费率为出账时快照）"""
+    TYPE_CHOICES = [
+        ('time', '工时费'),
+        ('expense', '代垫费用'),
+        ('fixed', '固定收费'),
+    ]
+    bill = models.ForeignKey(Bill, on_delete=models.CASCADE, related_name='lines')
+    line_type = models.CharField('明细类型', max_length=10, choices=TYPE_CHOICES)
+    description = models.CharField('摘要', max_length=200)
+    quantity = models.DecimalField('数量(工时)', max_digits=6, decimal_places=2,
+                                   null=True, blank=True)
+    unit_price = models.DecimalField('单价/费率(元)', max_digits=10, decimal_places=2,
+                                     null=True, blank=True)
+    amount = models.DecimalField('金额(元)', max_digits=12, decimal_places=2)
+    time_entry = models.OneToOneField(TimeEntry, on_delete=models.SET_NULL,
+                                      null=True, blank=True,
+                                      related_name='bill_line')
+    expense = models.OneToOneField(Expense, on_delete=models.SET_NULL,
+                                   null=True, blank=True,
+                                   related_name='bill_line')
+
+    def __str__(self):
+        return f'{self.bill.bill_number} - {self.description}'
+
+
+class Payment(models.Model):
+    """收款记录（支持部分收款；冲正退款以负数记录）"""
+    METHOD_CHOICES = [
+        ('bank', '银行转账'),
+        ('cash', '现金'),
+        ('check', '支票'),
+        ('other', '其他'),
+    ]
+    bill = models.ForeignKey(Bill, on_delete=models.CASCADE, related_name='payments')
+    amount = models.DecimalField('金额(元)', max_digits=12, decimal_places=2)
+    received_date = models.DateField('收款日期')
+    method = models.CharField('收款方式', max_length=10,
+                              choices=METHOD_CHOICES, default='bank')
+    is_reversal = models.BooleanField('冲正退款', default=False)
+    notes = models.CharField('备注', max_length=200, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['received_date', 'id']
+
+    def __str__(self):
+        return f'{self.bill.bill_number} 收款 ¥{self.amount}'
 
 
 class Deadline(models.Model):

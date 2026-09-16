@@ -207,6 +207,15 @@
               </el-table-column>
             </el-table>
           </el-tab-pane>
+
+          <!-- 律师费 -->
+          <el-tab-pane label="律师费" name="finance" lazy>
+            <case-finance
+              :case-id="caseId"
+              :case-lawyers="caseData.case_lawyers"
+              :case-amount="caseData.amount"
+            />
+          </el-tab-pane>
         </el-tabs>
       </el-card>
     </template>
@@ -416,6 +425,7 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import api from '../api'
+import CaseFinance from '../components/CaseFinance.vue'
 
 const route = useRoute()
 const caseId = route.params.id

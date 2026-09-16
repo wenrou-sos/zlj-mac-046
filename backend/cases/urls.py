@@ -13,6 +13,12 @@ router.register('hearings', views.HearingViewSet, basename='hearing')
 router.register('stage-logs', views.StageLogViewSet, basename='stage-log')
 router.register('materials', views.MaterialViewSet, basename='material')
 router.register('deadlines', views.DeadlineViewSet, basename='deadline')
+router.register('fee-agreements', views.FeeAgreementViewSet, basename='fee-agreement')
+router.register('case-rates', views.CaseRateViewSet, basename='case-rate')
+router.register('time-entries', views.TimeEntryViewSet, basename='time-entry')
+router.register('expenses', views.ExpenseViewSet, basename='expense')
+router.register('bills', views.BillViewSet, basename='bill')
+router.register('payments', views.PaymentViewSet, basename='payment')
 
 urlpatterns = [
     path('', include(router.urls)),

@@ -1,19 +1,26 @@
 from datetime import date, timedelta
+from decimal import Decimal, InvalidOperation
 
+from django.db import transaction
 from django.db.models import Count, Q
 from django.shortcuts import get_object_or_404
+from django.utils import timezone
 from rest_framework import status, viewsets
 from rest_framework.decorators import action, api_view
 from rest_framework.response import Response
 
-from .models import (Case, CaseLawyer, CaseParty, Deadline, Hearing, Lawyer,
-                     Material, Party, StageLog)
-from .serializers import (CaseDetailSerializer, CaseLawyerSerializer,
+from .models import (Bill, Case, CaseLawyer, CaseParty, CaseRate, Deadline,
+                     Expense, FeeAgreement, Hearing, Lawyer, Material, Party,
+                     Payment, StageLog, TimeEntry)
+from .serializers import (BillCreateSerializer, BillSerializer,
+                          CaseDetailSerializer, CaseLawyerSerializer,
                           CaseListSerializer, CasePartySerializer,
-                          CaseWriteSerializer, DeadlineSerializer,
-                          HearingSerializer, LawyerSerializer,
-                          MaterialSerializer, PartySerializer,
-                          StageLogSerializer)
+                          CaseRateSerializer, CaseWriteSerializer,
+                          DeadlineSerializer, ExpenseSerializer,
+                          FeeAgreementSerializer, HearingSerializer,
+                          LawyerSerializer, MaterialSerializer, PartySerializer,
+                          PaymentSerializer, StageLogSerializer,
+                          TimeEntrySerializer)
 
 
 class LawyerViewSet(viewsets.ModelViewSet):
@@ -104,6 +111,43 @@ class CaseViewSet(viewsets.ModelViewSet):
         has_high = any(c['level'] == 'high' for c in conflicts)
         return Response({'has_conflict': has_high, 'conflicts': conflicts})
 
+    @action(detail=True, methods=['get'])
+    def finance(self, request, pk=None):
+        """案件财务全景：收费约定、费率、工时、费用、账单及应收/已收/未收汇总"""
+        case = self.get_object()
+        bills = case.bills.prefetch_related('lines', 'payments')
+        active = [b for b in bills if b.status != 'void']
+        entries = case.time_entries.select_related('lawyer', 'bill_line__bill')
+        expenses = case.expenses.select_related('lawyer', 'bill_line__bill')
+
+        zero = Decimal('0')
+
+        def money(value):
+            return str(value.quantize(Decimal('0.01')))
+
+        summary = {
+            'billed_total': money(sum((b.total_amount for b in active), zero)),
+            'reduction_total': money(sum((b.reduction_amount for b in active), zero)),
+            'received_total': money(sum((b.received_amount for b in active), zero)),
+            'outstanding_total': money(sum((b.outstanding for b in active), zero)),
+            'unbilled_time_amount': money(sum(
+                (e.amount for e in entries
+                 if e.status == 'approved' and e.amount is not None), zero)),
+            'unbilled_expense_amount': money(sum(
+                (e.amount for e in expenses if e.status == 'approved'), zero)),
+            'pending_time_count': entries.filter(status='pending').count(),
+            'pending_expense_count': expenses.filter(status='pending').count(),
+        }
+        agreement = getattr(case, 'fee_agreement', None)
+        return Response({
+            'agreement': FeeAgreementSerializer(agreement).data if agreement else None,
+            'rates': CaseRateSerializer(case.case_rates.all(), many=True).data,
+            'time_entries': TimeEntrySerializer(entries, many=True).data,
+            'expenses': ExpenseSerializer(expenses, many=True).data,
+            'bills': BillSerializer(bills, many=True).data,
+            'summary': summary,
+        })
+
 
 class CasePartyViewSet(viewsets.ModelViewSet):
     serializer_class = CasePartySerializer
@@ -175,6 +219,227 @@ class DeadlineViewSet(viewsets.ModelViewSet):
             qs = qs.filter(is_done=False,
                            due_date__lte=date.today() + timedelta(days=days))
         return qs
+
+
+# ---------------------------------------------------------------- 费用与账单
+
+class FeeAgreementViewSet(viewsets.ModelViewSet):
+    """案件收费约定（固定收费/按工时收费，一案一份）"""
+    serializer_class = FeeAgreementSerializer
+
+    def get_queryset(self):
+        qs = FeeAgreement.objects.select_related('case')
+        case_id = self.request.query_params.get('case')
+        if case_id:
+            qs = qs.filter(case_id=case_id)
+        return qs
+
+
+class CaseRateViewSet(viewsets.ModelViewSet):
+    """计时费率：按生效日期记录，变更仅影响生效日之后提交的工时"""
+    serializer_class = CaseRateSerializer
+
+    def get_queryset(self):
+        qs = CaseRate.objects.select_related('case', 'lawyer')
+        case_id = self.request.query_params.get('case')
+        if case_id:
+            qs = qs.filter(case_id=case_id)
+        return qs
+
+
+def _approve_or_reject(instance, approve):
+    if approve and instance.status != 'pending':
+        return Response({'detail': '仅待核准记录可以核准'},
+                        status=status.HTTP_400_BAD_REQUEST)
+    if not approve and instance.status != 'approved':
+        return Response({'detail': '仅已核准记录可以退回'},
+                        status=status.HTTP_400_BAD_REQUEST)
+    instance.status = 'approved' if approve else 'pending'
+    instance.approved_at = timezone.now() if approve else None
+    instance.save(update_fields=['status', 'approved_at'])
+    return None
+
+
+class ApproveFlowMixin:
+    """核准/退回/删除保护（工时与代垫费用共用）"""
+
+    @action(detail=True, methods=['post'])
+    def approve(self, request, pk=None):
+        obj = self.get_object()
+        resp = _approve_or_reject(obj, approve=True)
+        return resp or Response(self.get_serializer(obj).data)
+
+    @action(detail=True, methods=['post'])
+    def reject(self, request, pk=None):
+        obj = self.get_object()
+        resp = _approve_or_reject(obj, approve=False)
+        return resp or Response(self.get_serializer(obj).data)
+
+    def destroy(self, request, *args, **kwargs):
+        obj = self.get_object()
+        if obj.status != 'pending':
+            return Response({'detail': '仅待核准记录可以删除'},
+                            status=status.HTTP_400_BAD_REQUEST)
+        return super().destroy(request, *args, **kwargs)
+
+
+class TimeEntryViewSet(ApproveFlowMixin, viewsets.ModelViewSet):
+    serializer_class = TimeEntrySerializer
+
+    def get_queryset(self):
+        qs = TimeEntry.objects.select_related('case', 'lawyer', 'bill_line__bill')
+        p = self.request.query_params
+        if p.get('case'):
+            qs = qs.filter(case_id=p['case'])
+        if p.get('status'):
+            qs = qs.filter(status=p['status'])
+        return qs
+
+
+class ExpenseViewSet(ApproveFlowMixin, viewsets.ModelViewSet):
+    serializer_class = ExpenseSerializer
+
+    def get_queryset(self):
+        qs = Expense.objects.select_related('case', 'lawyer', 'bill_line__bill')
+        p = self.request.query_params
+        if p.get('case'):
+            qs = qs.filter(case_id=p['case'])
+        if p.get('status'):
+            qs = qs.filter(status=p['status'])
+        return qs
+
+
+class BillViewSet(viewsets.ModelViewSet):
+    """分期账单：生成、收款、减免、冲正；已收款账单不能直接删除"""
+    http_method_names = ['get', 'post', 'delete', 'head', 'options']
+
+    def get_queryset(self):
+        qs = (Bill.objects.select_related('case')
+              .prefetch_related('lines', 'payments'))
+        case_id = self.request.query_params.get('case')
+        if case_id:
+            qs = qs.filter(case_id=case_id)
+        return qs
+
+    def get_serializer_class(self):
+        if self.action == 'create':
+            return BillCreateSerializer
+        return BillSerializer
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        bill = serializer.save()
+        return Response(BillSerializer(bill).data, status=status.HTTP_201_CREATED)
+
+    def destroy(self, request, *args, **kwargs):
+        bill = self.get_object()
+        if bill.status == 'void':
+            return Response({'detail': '已冲正账单不能删除'},
+                            status=status.HTTP_400_BAD_REQUEST)
+        if bill.payments.exists():
+            return Response({'detail': '已收款账单不能直接删除，如需作废请使用冲正'},
+                            status=status.HTTP_400_BAD_REQUEST)
+        with transaction.atomic():
+            self._release_lines(bill)
+            bill.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    @staticmethod
+    def _release_lines(bill):
+        """释放账单占用的工时/费用（明细行保留当时计价快照，仅断开关联）"""
+        for line in bill.lines.all():
+            if line.time_entry:
+                entry = line.time_entry
+                line.time_entry = None
+                entry.status = 'approved'
+                entry.save(update_fields=['status'])
+                line.save(update_fields=['time_entry'])
+            if line.expense:
+                expense = line.expense
+                line.expense = None
+                expense.status = 'approved'
+                expense.save(update_fields=['status'])
+                line.save(update_fields=['expense'])
+
+    @action(detail=True, methods=['post'])
+    def reduction(self, request, pk=None):
+        """费用减免：设置减免金额（绝对值），需说明原因"""
+        bill = self.get_object()
+        if bill.status == 'void':
+            return Response({'detail': '账单已冲正'}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            amount = Decimal(str(request.data.get('amount', '0')))
+        except InvalidOperation:
+            return Response({'detail': '减免金额格式不正确'},
+                            status=status.HTTP_400_BAD_REQUEST)
+        reason = request.data.get('reason', '').strip()
+        if amount < 0:
+            return Response({'detail': '减免金额不能为负'},
+                            status=status.HTTP_400_BAD_REQUEST)
+        if amount > 0 and not reason:
+            return Response({'detail': '请填写减免原因'},
+                            status=status.HTTP_400_BAD_REQUEST)
+        if bill.received_amount + amount > bill.total_amount:
+            return Response(
+                {'detail': f'减免后应收不能低于已收款 ¥{bill.received_amount}'},
+                status=status.HTTP_400_BAD_REQUEST)
+        bill.reduction_amount = amount
+        bill.reduction_reason = reason
+        bill.save(update_fields=['reduction_amount', 'reduction_reason'])
+        bill.refresh_status()
+        return Response(BillSerializer(bill).data)
+
+    @action(detail=True, methods=['post'])
+    def void(self, request, pk=None):
+        """冲正：账单作废，已收款自动生成负数退款记录，工时/费用释放回已核准"""
+        bill = self.get_object()
+        if bill.status == 'void':
+            return Response({'detail': '账单已冲正'}, status=status.HTTP_400_BAD_REQUEST)
+        reason = request.data.get('reason', '').strip()
+        if not reason:
+            return Response({'detail': '请填写冲正原因'},
+                            status=status.HTTP_400_BAD_REQUEST)
+        with transaction.atomic():
+            received = bill.received_amount
+            if received > 0:
+                Payment.objects.create(
+                    bill=bill, amount=-received, received_date=date.today(),
+                    method='other', is_reversal=True,
+                    notes='账单冲正，退回已收款项')
+            self._release_lines(bill)
+            bill.status = 'void'
+            bill.void_reason = reason
+            bill.voided_at = timezone.now()
+            bill.save(update_fields=['status', 'void_reason', 'voided_at'])
+        bill.refresh_from_db()  # 清除预取缓存，确保响应含新生成的退款记录
+        return Response(BillSerializer(bill).data)
+
+
+class PaymentViewSet(viewsets.ModelViewSet):
+    """收款记录：支持部分收款；删除收款会回写账单状态"""
+    serializer_class = PaymentSerializer
+    http_method_names = ['get', 'post', 'delete', 'head', 'options']
+
+    def get_queryset(self):
+        qs = Payment.objects.select_related('bill')
+        bill_id = self.request.query_params.get('bill')
+        if bill_id:
+            qs = qs.filter(bill_id=bill_id)
+        return qs
+
+    def destroy(self, request, *args, **kwargs):
+        payment = self.get_object()
+        if payment.bill.status == 'void':
+            return Response({'detail': '账单已冲正，收款记录不能删除'},
+                            status=status.HTTP_400_BAD_REQUEST)
+        if payment.is_reversal:
+            return Response({'detail': '冲正退款记录不能删除'},
+                            status=status.HTTP_400_BAD_REQUEST)
+        bill = payment.bill
+        response = super().destroy(request, *args, **kwargs)
+        bill.refresh_status()
+        return response
 
 
 @api_view(['GET'])

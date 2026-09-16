@@ -43,3 +43,46 @@
 2026-09-14 17:56:09.293 UTC [653] LOG:  database system is ready to accept connections
 2026-09-14 18:01:09.296 UTC [654] LOG:  checkpoint starting: time
 2026-09-14 18:01:11.175 UTC [654] LOG:  checkpoint complete: wrote 19 buffers (0.1%); 0 WAL file(s) added, 0 removed, 0 recycled; write=1.857 s, sync=0.011 s, total=1.880 s; sync files=19, longest=0.002 s, average=0.001 s; distance=21 kB, estimate=21 kB; lsn=0/1A53180, redo lsn=0/1A53128
+2026-09-15 16:44:51.407 UTC [158] FATAL:  data directory "/workspace/pgdata" has invalid permissions
+2026-09-15 16:44:51.407 UTC [158] DETAIL:  Permissions should be u=rwx (0700) or u=rwx,g=rx (0750).
+2026-09-15 16:45:16.914 UTC [172] FATAL:  could not open directory "pg_notify": No such file or directory
+2026-09-15 16:45:16.915 UTC [172] LOG:  database system is shut down
+2026-09-15 16:46:08.162 UTC [204] LOG:  starting PostgreSQL 17.11 on aarch64-unknown-linux-gnu, compiled by gcc (Ubuntu/Linaro 7.5.0-3ubuntu1~18.04) 7.5.0, 64-bit
+2026-09-15 16:46:08.163 UTC [204] LOG:  listening on IPv6 address "::1", port 5432
+2026-09-15 16:46:08.163 UTC [204] LOG:  listening on IPv4 address "127.0.0.1", port 5432
+2026-09-15 16:46:08.165 UTC [204] LOG:  listening on Unix socket "/workspace/.s.PGSQL.5432"
+2026-09-15 16:46:08.169 UTC [207] LOG:  database system was interrupted; last known up at 2026-09-14 18:01:11 UTC
+2026-09-15 16:46:08.170 UTC [207] LOG:  creating missing WAL directory "pg_wal/archive_status"
+2026-09-15 16:46:08.170 UTC [207] LOG:  creating missing WAL directory "pg_wal/summaries"
+2026-09-15 16:46:08.552 UTC [207] LOG:  database system was not properly shut down; automatic recovery in progress
+2026-09-15 16:46:08.556 UTC [207] LOG:  redo starts at 0/1A53128
+2026-09-15 16:46:08.556 UTC [207] LOG:  invalid record length at 0/1A53230: expected at least 24, got 0
+2026-09-15 16:46:08.556 UTC [207] LOG:  redo done at 0/1A531F8 system usage: CPU: user: 0.00 s, system: 0.00 s, elapsed: 0.00 s
+2026-09-15 16:46:08.559 UTC [205] LOG:  checkpoint starting: end-of-recovery immediate wait
+2026-09-15 16:46:08.559 UTC [205] ERROR:  could not open directory "pg_logical/snapshots": No such file or directory
+2026-09-15 16:46:08.559 UTC [207] FATAL:  checkpoint request failed
+2026-09-15 16:46:08.559 UTC [207] HINT:  Consult recent messages in the server log for details.
+2026-09-15 16:46:08.559 UTC [204] LOG:  startup process (PID 207) exited with exit code 1
+2026-09-15 16:46:08.559 UTC [204] LOG:  terminating any other active server processes
+2026-09-15 16:46:08.559 UTC [204] LOG:  shutting down due to startup process failure
+2026-09-15 16:46:08.560 UTC [204] LOG:  database system is shut down
+2026-09-15 16:46:25.768 UTC [221] LOG:  starting PostgreSQL 17.11 on aarch64-unknown-linux-gnu, compiled by gcc (Ubuntu/Linaro 7.5.0-3ubuntu1~18.04) 7.5.0, 64-bit
+2026-09-15 16:46:25.772 UTC [221] LOG:  listening on IPv6 address "::1", port 5432
+2026-09-15 16:46:25.772 UTC [221] LOG:  listening on IPv4 address "127.0.0.1", port 5432
+2026-09-15 16:46:25.773 UTC [221] LOG:  listening on Unix socket "/workspace/.s.PGSQL.5432"
+2026-09-15 16:46:25.777 UTC [224] LOG:  database system shutdown was interrupted; last known up at 2026-09-15 16:46:08 UTC
+2026-09-15 16:46:25.832 UTC [224] LOG:  database system was not properly shut down; automatic recovery in progress
+2026-09-15 16:46:25.834 UTC [224] LOG:  redo starts at 0/1A53128
+2026-09-15 16:46:25.834 UTC [224] LOG:  invalid record length at 0/1A53230: expected at least 24, got 0
+2026-09-15 16:46:25.834 UTC [224] LOG:  redo done at 0/1A531F8 system usage: CPU: user: 0.00 s, system: 0.00 s, elapsed: 0.00 s
+2026-09-15 16:46:25.838 UTC [222] LOG:  checkpoint starting: end-of-recovery immediate wait
+2026-09-15 16:46:25.843 UTC [222] LOG:  checkpoint complete: wrote 3 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.002 s, sync=0.001 s, total=0.006 s; sync files=2, longest=0.001 s, average=0.001 s; distance=0 kB, estimate=0 kB; lsn=0/1A53230, redo lsn=0/1A53230
+2026-09-15 16:46:25.844 UTC [221] LOG:  database system is ready to accept connections
+2026-09-15 16:51:25.948 UTC [222] LOG:  checkpoint starting: time
+2026-09-15 16:51:45.206 UTC [222] LOG:  checkpoint complete: wrote 185 buffers (1.1%); 0 WAL file(s) added, 0 removed, 0 recycled; write=19.204 s, sync=0.048 s, total=19.259 s; sync files=131, longest=0.007 s, average=0.001 s; distance=520 kB, estimate=520 kB; lsn=0/1AD5480, redo lsn=0/1AD53F0
+2026-09-15 16:56:25.247 UTC [222] LOG:  checkpoint starting: time
+2026-09-15 16:56:37.368 UTC [222] LOG:  checkpoint complete: wrote 116 buffers (0.7%); 0 WAL file(s) added, 0 removed, 0 recycled; write=12.064 s, sync=0.044 s, total=12.122 s; sync files=95, longest=0.005 s, average=0.001 s; distance=381 kB, estimate=506 kB; lsn=0/1B349E8, redo lsn=0/1B34958
+2026-09-15 17:01:25.457 UTC [222] LOG:  checkpoint starting: time
+2026-09-15 17:01:36.578 UTC [222] LOG:  checkpoint complete: wrote 108 buffers (0.7%); 0 WAL file(s) added, 0 removed, 0 recycled; write=11.060 s, sync=0.049 s, total=11.124 s; sync files=94, longest=0.004 s, average=0.001 s; distance=278 kB, estimate=483 kB; lsn=0/1B7A2C0, redo lsn=0/1B7A230
+2026-09-15 17:06:25.684 UTC [222] LOG:  checkpoint starting: time
+2026-09-15 17:06:26.340 UTC [222] LOG:  checkpoint complete: wrote 6 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.637 s, sync=0.004 s, total=0.659 s; sync files=4, longest=0.002 s, average=0.001 s; distance=6 kB, estimate=436 kB; lsn=0/1B7BD98, redo lsn=0/1B7BD40
